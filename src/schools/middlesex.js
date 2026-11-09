@@ -1,6 +1,9 @@
 // Middlesex School class grid, 2026–27, transcribed from the student planner
-// (weeks of Mar 29 and Apr 19, 2027) and the dorm study-hours sheet.
-// Monday–Friday are the same every week; only Saturday differs between BF and ADB weeks (confirmed by the founder).
+// (weeks of Oct 19 and Oct 26, 2026; Mar 29 and Apr 19, 2027) and the dorm study-hours sheet.
+// Monday–Friday are the same every week; only Saturday differs between ECF and ADB weeks (confirmed by the founder).
+// ECF Saturday (Oct 24): E 9:05–9:50, C 9:55–10:40, F 10:45–11:30. ADB Saturday (Oct 31, Apr 24): A, D, B.
+// Note: the spring planner (Apr 3, 2027) shows a B/F Saturday (Bx 9:05–9:30, B 9:30–10:15, F 10:20–11:05, Fx 11:05–11:30).
+// If Saturdays change in spring, add that week type then; until confirmed, this term's ECF/ADB is used.
 // Only class blocks are listed: chapel, community time, meetings and lunch are never treated as free time.
 // A weekday set to `null` would mean "not confirmed" (no automatic free blocks that day).
 
@@ -22,12 +25,14 @@ export const MIDDLESEX = Object.freeze({
   name: 'Middlesex School',
   source: 'Student planner 2026–27 (weeks of Mar 29 and Apr 19) and the dorm study-hours sheet',
   blocks: ['A', 'B', 'C', 'D', 'E', 'F', 'G'],
-  weekTypes: ['BF', 'ADB'],
-  weekTypeHint: 'Check Saturday in your planner: B and F blocks = BF week; A, D and B blocks = ADB week.',
+  weekTypes: ['ECF', 'ADB'],
+  weekTypeHint: 'Check Saturday in your planner: E, C and F blocks = ECF week; A, D and B blocks = ADB week.',
+  // Saved settings from before the rename (Nov 9, 2026) said 'BF' for the non-ADB week.
+  legacyWeekTypes: { BF: 'ECF' },
   // Weekday (0 = Sunday … 6 = Saturday) → class periods. Sunday has no classes.
   grid: {
-    BF: { 0: [], 1: MON, 2: TUE, 3: WED, 4: THU, 5: FRI,
-      6: [P('Bx', '09:05', '09:30'), P('B', '09:30', '10:15'), P('F', '10:20', '11:05'), P('Fx', '11:05', '11:30')] },
+    ECF: { 0: [], 1: MON, 2: TUE, 3: WED, 4: THU, 5: FRI,
+      6: [P('E', '09:05', '09:50'), P('C', '09:55', '10:40'), P('F', '10:45', '11:30')] },
     ADB: { 0: [], 1: MON, 2: TUE, 3: WED, 4: THU, 5: FRI,
       6: [P('A', '09:05', '09:50'), P('D', '09:55', '10:40'), P('B', '10:45', '11:30')] },
   },

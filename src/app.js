@@ -11,7 +11,7 @@ import { parseTaskText, parseBulk, validateDraft, draftToTask, makeDeadline } fr
 import {
   buildPlan, buildWeek, nextSession, explainSession, daySettings, earliestStudyFn,
   blocksForDate, schoolBlocksForDate, classPeriodsForDate, weekTypeFor, mondayOf,
-  blockStartOn, classBlocksOn, syncBlockDeadlines,
+  blockStartOn, classBlocksOn, syncBlockDeadlines, timetableForDate,
 } from './plan.js';
 import { MIDDLESEX } from './schools/middlesex.js';
 import { buildReminderCalendar, reminderEvents } from './ics.js';
@@ -153,12 +153,13 @@ function renderBanners() {
   const b = app.banners;
   if (app.mode === 'demo') {
     const simulated = app.clockOffset !== 0;
-    put(root, h('div', { class: 'banner banner-demo', role: 'region', 'aria-label': 'Example mode' },
-      h('p', {}, h('strong', {}, 'Example day. '),
-        `Fictional tasks only — your own data is untouched. ${simulated ? `The clock is set to ${fmtT(nowMin())} so you can see a full afternoon.` : 'Using the real clock.'}`),
-      h('div', { class: 'banner-actions' },
-        button(simulated ? 'Use real time' : 'Use example time (4 PM)', toggleDemoClock, 'btn-ghost'),
-        button('Exit example', exitDemo, 'btn-secondary'))));
+    put(root, h('div', { class: 'banner banner-demo banner-slim', role: 'region', 'aria-label': 'Example mode' },
+      h('div', { class: 'slim-row' },
+        h('p', {}, h('strong', {}, 'Example'), simulated ? ` · clock set to ${fmtT(nowMin())}` : ' · real clock'),
+        button('Exit', exitDemo, 'btn-secondary btn-small', { 'aria-label': 'Exit example' })),
+      h('details', { class: 'slim-details' }, h('summary', {}, 'Details'),
+        h('p', {}, `Fictional tasks only — your own data is untouched. ${simulated ? 'The clock is moved to the afternoon so you can see a full day.' : ''}`),
+        button(simulated ? 'Use real time' : 'Use example time (4 PM)', toggleDemoClock, 'btn-ghost btn-small'))));
   }
   if (b.storage) {
     put(root, h('div', { class: 'banner banner-warn', role: 'alert' },
@@ -229,6 +230,7 @@ function renderNav() {
 
 function go(view, { focus = true } = {}) {
   app.view = view;
+  if (view === 'week') markReviewed();
   render();
   if (focus) {
     const heading = $(`#view-${view} h1`);
@@ -264,9 +266,11 @@ function renderToday(week) {
     day.noStudy ? h('span', { class: 'chip' }, 'Busy tonight') : null));
 
   const open = state.tasks.filter((x) => x.status === 'open');
-  if (app.mode === 'real' && !isStandalone() && isTouchDevice() && !state.prefs.homeScreenDismissed) put(root, homeScreenCard(state.tasks.length > 0));
   if (app.mode === 'real' && isStandalone() && !state.tasks.length && !state.prefs.bringOverDismissed) put(root, bringOverCard());
   if (app.mode === 'real' && !state.settings.school && !state.prefs.setupNudgeDismissed) put(root, setupCard());
+  else if (checklistOpen()) put(root, checklistCard());
+  // The Home Screen card waits until the student is set up and has something saved (it was crowding the first screen).
+  if (app.mode === 'real' && !isStandalone() && isTouchDevice() && !state.prefs.homeScreenDismissed && state.tasks.length && !checklistOpen()) put(root, homeScreenCard(true));
   if (app.addOpen || app.addDraft || !open.length) put(root, addBox(open.length > 0));
   if (!open.length) {
     put(root, h('div', { class: 'empty' },
@@ -283,7 +287,7 @@ function renderToday(week) {
   put(root, todaySchedule(plan, t));
 }
 
-/** “BF week ⇄” — one tap to switch the alternation if a break threw it off. */
+/** “ECF week ⇄” — one tap to switch the alternation if a break threw it off. */
 function weekChip(date, weekType) {
   return button(h('span', {}, `${weekType} week `, h('span', { 'aria-hidden': 'true' }, '⇄')), () => switchWeek(date, weekType), 'chip-btn', { 'aria-label': `${weekType} week. Switch week type`, 'data-key': 'week-chip' });
 }
@@ -300,6 +304,58 @@ async function switchWeek(date, current) {
 }
 
 // ---------- first-run setup (inline, two taps) ----------
+// ---------- getting started ----------
+function checklistSteps() {
+  const st = app.state;
+  const skipped = !st.settings.school && !!st.prefs.setupNudgeDismissed;
+  const set = !!st.settings.school || skipped;
+  return [
+    { label: 'Check your timetable: choose ECF or ADB.', done: set },
+    { label: 'Mark your free blocks: tell Blockwise when you can work.', done: set },
+    { label: 'Add something due, with how long it needs. For a test, that\'s study time, not how long the test lasts.', done: st.tasks.length > 0 },
+    { label: 'Review your next step: change anything that doesn\'t fit.', done: !!st.prefs.reviewedNext },
+  ];
+}
+const checklistOpen = () => app.mode === 'real' && !app.state.prefs.checklistDismissed && checklistSteps().some((x) => !x.done);
+
+function checklistList(steps) {
+  const cur = steps.findIndex((x) => !x.done);
+  return h('ol', { class: 'checklist' }, ...steps.map((x, i) => h('li', { class: [x.done && 'is-done', i === cur && 'is-current'] },
+    h('span', { class: 'check-mark', 'aria-hidden': 'true' }, x.done ? '✓' : String(i + 1)),
+    h('span', {}, x.label, x.done ? h('span', { class: 'visually-hidden' }, ' (done)') : null))));
+}
+
+function checklistCard() {
+  const steps = checklistSteps();
+  const n = steps.filter((x) => x.done).length;
+  return h('section', { class: 'callout-card checklist-card', 'aria-label': 'Getting started' },
+    h('div', { class: 'checklist-head' },
+      h('p', { class: 'callout-title' }, `Getting started · ${n} of ${steps.length} done`),
+      button('Hide', () => commit((s) => { s.prefs.checklistDismissed = true; }, 'You can find it again in ⋯ → How to use Blockwise.'), 'btn-link btn-small', { 'aria-label': 'Hide the getting started list' })),
+    checklistList(steps));
+}
+
+/** Step 4 is done once the student looks at or changes a suggestion. */
+function markReviewed() {
+  if (app.mode !== 'real' || app.state.prefs.reviewedNext || !app.state.tasks.length) return;
+  app.state.prefs.reviewedNext = true;
+  persist();
+}
+
+function openHowTo() {
+  const dismissed = app.mode === 'real' && app.state.prefs.checklistDismissed && checklistSteps().some((x) => !x.done);
+  openSheet('How to use Blockwise', [
+    checklistList(checklistSteps()),
+    h('h3', { class: 'small-heading' }, 'Every day'),
+    h('ul', { class: 'steps' },
+      h('li', {}, h('strong', {}, 'Today'), ' shows what to do now and the rest of your day, block by block.'),
+      h('li', {}, h('strong', {}, 'Done'), ' — say whether you finished or about how much is left. ', h('strong', {}, 'Not now'), ' moves it off today; the plan rearranges.'),
+      h('li', {}, h('strong', {}, 'Week'), ' shows your free blocks and study hours for the next days. Tap a free block to keep it free.'),
+      h('li', {}, 'Tap any task name to change it, finish it or delete it. ⋯ → All tasks lists everything.')),
+    dismissed ? button('Show the list on Today again', () => { closeSheet(); commit((s) => { delete s.prefs.checklistDismissed; }); }, 'btn-secondary btn-small') : null,
+  ]);
+}
+
 function setupCard() {
   const free = new Set(), keep = new Set();
   let wk = null;
@@ -318,13 +374,15 @@ function setupCard() {
   };
   draw();
   return h('section', { class: 'setup', 'aria-label': 'Set up your classes' },
-    h('p', { class: 'setup-q' }, 'Which blocks are free for you?'), letters,
+    h('p', { class: 'callout-title' }, 'Getting started'),
+    checklistList(checklistSteps()),
+    h('p', { class: 'setup-q' }, '1. Is this an ECF or ADB week?', h('span', { class: 'hint block' }, 'Look at this Saturday in your planner: E, C, F blocks or A, D, B blocks.')), weeks,
+    h('p', { class: 'setup-q' }, '2. Which blocks are free for you?', h('span', { class: 'hint block' }, 'Blocks with no class. Blockwise plans work in these.')), letters,
     keepWrap,
-    h('p', { class: 'setup-q' }, 'Is this a BF or ADB week?', h('span', { class: 'hint block' }, 'Look at Saturday in your planner.')), weeks,
     err,
     h('div', { class: 'actions' },
       button('Save', () => {
-        if (!wk) { err.textContent = 'Pick BF or ADB.'; return; }
+        if (!wk) { err.textContent = 'Pick ECF or ADB.'; return; }
         commit((s) => {
           s.settings.school = { id: 'middlesex', freeBlocks: [...free].sort(), freeExt: [], anchor: { monday: mondayOf(today()), type: wk } };
           if (keep.size) s.settings.school.keepFree = [...keep].filter((L) => free.has(L)).sort();
@@ -559,7 +617,7 @@ function nowCard(plan, t, week) {
   const fs = firstStepFor(task);
   const label = slotLabel(t, item);
   return h('section', { class: 'now', 'aria-labelledby': 'now-title' },
-    h('p', { class: 'eyebrow' }, `${status === 'now' ? 'Now · ' : ''}${label ? `${label} · ` : ''}${fmtRange(item.start, item.end)}`),
+    h('p', { class: 'eyebrow' }, `${status === 'now' ? 'Now' : 'Next'} · ${label ? `${label} · ` : ''}${fmtRange(item.start, item.end)}`),
     h('h2', { id: 'now-title', tabindex: '-1' }, task.title),
     h('p', { class: 'why-short' }, nowLine(plan, item, task)),
     task.firstStep || isSubstantial(task) ? h('p', { class: 'first-step' }, 'Start with: ', fs.text) : null,
@@ -580,23 +638,30 @@ function nowLine(plan, item, task) {
     const when = ['Today', 'Tomorrow'].includes(rel) ? rel.toLowerCase() : rel;
     parts.push(`${task.kind === 'test' ? 'Test' : 'Due'} ${when}${task.deadline.block ? ` in ${task.deadline.block} block` : task.deadline.time ? ` at ${fmtT(D.parseHM(task.deadline.time))}` : ''}.`);
   } else parts.push('No due date, so it uses spare time.');
-  parts.push(`${item.minutes} min of ${fmtDur(task.remainingMin)} left.`);
-  if (info.tier === 'urgent' && !info.late && info.cutoffMin == null) {
-    const partner = Object.entries(plan.tasks).find(([id, o]) => id !== item.taskId && o.tier === 'urgent' && o.scheduled > 0 && taskById(id) && taskById(id).status === 'open');
-    if (partner) parts.push(`Takes turns with “${taskById(partner[0]).title}” so neither gets squeezed.`);
-  }
+  parts.push(`This session ${fmtDur(item.minutes)} · ${fmtDur(task.remainingMin)} left in total.`);
   return parts.join(' ');
 }
 
+/** “Takes turns with …” when two urgent things share tonight (shown under Why this?). */
+function turnTaking(plan, item) {
+  const info = plan.tasks[item.taskId] || {};
+  if (info.tier !== 'urgent' || info.late || info.cutoffMin != null) return null;
+  const partner = Object.entries(plan.tasks).find(([id, o]) => id !== item.taskId && o.tier === 'urgent' && o.scheduled > 0 && taskById(id) && taskById(id).status === 'open');
+  return partner ? `Takes turns with “${taskById(partner[0]).title}” so neither gets squeezed.` : null;
+}
+
 function openWhy(plan, item, task) {
+  markReviewed();
+  const turns = turnTaking(plan, item);
   openSheet('Why this?', [
-    h('ul', {}, ...explainSession(plan, app.state, item).map((l) => h('li', {}, l))),
+    h('ul', {}, ...(turns ? [turns] : []).concat(explainSession(plan, app.state, item)).map((l) => h('li', {}, l))),
     h('p', { class: 'small muted' }, 'Blockwise fills your free blocks and study hours for the week, and updates the plan whenever something changes.'),
     button('Edit this task', () => openEditTask(task.id), 'btn-secondary btn-small'),
   ]);
 }
 
 function openDone(item, task) {
+  markReviewed();
   const asPlanned = Math.max(0, task.remainingMin - item.minutes);
   const options = [...new Set([asPlanned, 15, 30, 45, 60, 90, 120, 180].filter((m) => m > 0))].sort((a, b) => a - b);
   openSheet(task.title, [
@@ -628,6 +693,7 @@ function logDone(item, task, left) {
 }
 
 function notNow(date, task) {
+  markReviewed();
   commit(() => { const d = dayRecord(date); d.skipped = [...new Set([...(d.skipped || []), task.id])]; }, null);
   toast(`“${task.title}” moved to later days.`, { label: 'Undo', fn: () => unskipTask(date, task.id) });
 }
@@ -644,12 +710,17 @@ function completeTask(id) {
 /** One-line warnings: what doesn't fit, what's overdue, what was moved, and plain notes. */
 function alerts(plan, t) {
   const out = [];
-  for (const f of plan.notFit.filter((x) => x.kind === 'deadline')) {
-    const task = taskById(f.taskId);
-    if (!task || task.status !== 'open') continue;
+  const short = plan.notFit.filter((x) => x.kind === 'deadline').map((f) => ({ f, task: taskById(f.taskId) })).filter((x) => x.task && x.task.status === 'open');
+  if (short.length === 1) {
     out.push(h('p', { class: 'alert alert-danger' },
-      `About ${fmtDur(f.minutes)} of “${task.title}” won't fit before it's due. `,
+      `About ${fmtDur(short[0].f.minutes)} of “${short[0].task.title}” won't fit before it's due. `,
       button('What can I do?', openOverflowHelp, 'btn-link btn-small')));
+  } else if (short.length > 1) {
+    const total = short.reduce((m, x) => m + x.f.minutes, 0);
+    out.push(h('div', { class: 'alert alert-danger' },
+      h('p', {}, `About ${fmtDur(total)} of work across ${short.length} tasks won't fit before it's due. `, button('What can I do?', openOverflowHelp, 'btn-link btn-small')),
+      h('details', { class: 'alert-details' }, h('summary', {}, 'Which tasks'),
+        h('ul', {}, ...short.map(({ f, task }) => h('li', {}, `“${task.title}”: about ${fmtDur(f.minutes)}`))))));
   }
   const live = rankTasks(app.state.tasks.filter((x) => x.status === 'open'), { date: t, today: t, refMin: nowMin(), earliestStudyMin: earliestStudyFn(app.state), skipped: new Set() });
   for (const a of live.attention) {
@@ -705,27 +776,28 @@ function doneToday(t) {
   return h('section', { class: 'list-section', 'aria-label': 'Done today' }, h('ol', { class: 'simple-list' }, ...rows));
 }
 
-/** The rest of today, block by block: the same rows as Week (classes, free blocks, study hours), from the block you're in. */
+/** All of today, block by block: the same rows as Week (classes, free blocks, study hours). Finished blocks are dimmed. */
 function todaySchedule(plan, t) {
   const nm = nowMin();
   const skipped = new Set(daySettings(app.state, t).skipped);
   const items = plan.items.filter((i) => i.type !== 'session' || (i.end > nm && !skipped.has(i.taskId) && taskById(i.taskId)?.status === 'open'));
   const info = daySlots({ ...plan, items }, t);
-  const rows = info.slots.filter((sl) => sl.e > nm).map((sl) => (sl.s > nm ? sl
-    : { ...sl, now: true, freeTail: sl.items && sl.items.length ? Math.min(sl.freeTail, sl.e - nm) : sl.e - nm }));
-  if (!rows.length && !info.notes.length) return null;
-  const lis = rows.map((sl) => {
-    const li = slotRow(sl);
-    if (sl.now) {
+  if (!info.slots.length && !info.notes.length) return null;
+  const lis = info.slots.map((sl) => {
+    const past = sl.e <= nm;
+    const now = !past && sl.s <= nm;
+    const li = slotRow(past && !sl.cls && !sl.unset ? { ...sl, past: true } : (now ? { ...sl, freeTail: sl.items && sl.items.length ? Math.min(sl.freeTail, sl.e - nm) : sl.e - nm } : sl));
+    if (past) li.classList.add('is-past');
+    if (now) {
       li.classList.add('is-now');
       li.querySelector('.slot-when').append(h('span', { class: 'now-tag' }, 'now'));
     }
     return li;
   });
-  return h('section', { class: 'list-section', 'aria-label': 'Rest of today' },
+  return h('section', { class: 'list-section', 'aria-label': 'Today\'s blocks' },
     h('div', { class: 'day-card today-card' },
-      h('h2', { class: 'today-card-title' }, 'Rest of today'),
-      lis.length ? h('ul', { class: 'slots' }, ...lis) : h('p', { class: 'day-note' }, 'Nothing left today.'),
+      h('h2', { class: 'today-card-title' }, 'Today\'s blocks'),
+      lis.length ? h('ul', { class: 'slots' }, ...lis) : null,
       ...info.notes.map((n) => h('p', { class: 'day-note' }, n))));
 }
 // ===================== WEEK =====================
@@ -738,6 +810,12 @@ function renderWeek(week) {
     h('p', { class: 'lead' }, 'Your free blocks and study hours, filled in for you.'),
     h('p', { class: 'hint' }, 'This updates by itself as you add things or tap Done and Not now. Tap a day for a day off or a busy evening, or a free block to keep it free.')));
   if (!week) { put(root, h('p', { class: 'alert alert-danger' }, 'Something went wrong making your plan. Your tasks are safe.')); return; }
+  if (!app.state.settings.school) {
+    put(root, h('section', { class: 'callout-card', 'aria-label': 'Set up your free blocks' },
+      h('p', { class: 'callout-title' }, 'Which of these blocks are free for you?'),
+      h('p', { class: 'small' }, 'Here\'s the Middlesex timetable. Mark your free blocks and Blockwise will plan work in them. Until then, it only uses study hours.'),
+      h('div', { class: 'actions' }, button('Set up free blocks', openSchoolSetup, 'btn-primary btn-small', { 'data-key': 'week-setup' }))));
+  }
   const open = app.state.tasks.filter((x) => x.status === 'open');
   const name = (x) => taskLink(x, x.deadline && x.deadline.block ? h('span', { class: 'muted small' }, ` · ${x.deadline.block} block`) : null);
   const list = h('ol', { class: 'week-list' });
@@ -773,6 +851,11 @@ function renderWeek(week) {
 }
 
 function slotRow(sl) {
+  if (sl.unset) {
+    return h('li', { class: 'slot is-class is-unset' },
+      h('div', { class: 'slot-when' }, h('span', { class: 'slot-name' }, sl.name)),
+      h('div', { class: 'slot-what' }, h('span', { class: 'class-label' }, 'Not set yet'), h('span', { class: 'slot-time' }, fmtRange(sl.s, sl.e))));
+  }
   const nameEl = sl.letter
     ? h('button', { type: 'button', class: 'slot-name slot-btn', onclick: () => openBlockSheet(sl.date, sl.letter), 'aria-label': `${sl.name}, ${fmtRange(sl.s, sl.e)}. ${sl.kept ? 'Kept free' : 'Free'}. Change` }, sl.name)
     : h('span', { class: 'slot-name' }, sl.name);
@@ -785,6 +868,11 @@ function slotRow(sl) {
     return h('li', { class: 'slot is-class' },
       h('div', { class: 'slot-when' }, h('span', { class: 'slot-name' }, sl.name)),
       h('div', { class: 'slot-what' }, h('span', { class: 'class-label' }, 'Class'), h('span', { class: 'slot-time' }, fmtRange(sl.s, sl.e))));
+  }
+  if (sl.past) {
+    return h('li', { class: 'slot' },
+      h('div', { class: 'slot-when' }, h('span', { class: 'slot-name' }, sl.name), h('span', { class: 'slot-time' }, fmtRange(sl.s, sl.e))),
+      h('div', { class: 'slot-what' }, h('span', { class: 'class-label' }, 'Over')));
   }
   const free = !sl.items.length;
   return h('li', { class: ['slot', free && 'is-free'] },
@@ -829,11 +917,19 @@ function daySlots(plan, date) {
   }
   slots.push(...kept);
   for (const c of classPeriodsForDate(st, date)) slots.push({ s: c.start, e: c.end, name: `${c.code} block`, cls: true });
+  // Before setup: show the timetable, with each block's availability "not set" (nothing is planned in them).
+  let unsetNote = null;
+  if (!school.configured && !(st.days[date] && st.days[date].noClasses)) {
+    const tt = timetableForDate(date);
+    if (tt === null) unsetNote = `Saturday classes depend on the week (${MIDDLESEX.weekTypes.join(' or ')}). Set up your free blocks to see them.`;
+    else for (const c of tt) slots.push({ s: c.start, e: c.end, name: `${c.code} block`, unset: true });
+  }
   slots.sort((a, c) => a.s - c.s);
   const notes = [];
+  if (unsetNote) notes.push(unsetNote);
   if (school.noClasses) notes.push('No classes this day.');
   if (!ds.studyStart) notes.push(ds.noStudy ? 'Busy that evening.' : 'No study hours.');
-  if (!slots.some((x) => !x.cls && !x.kept) && !notes.length) notes.push('No free time.');
+  if (!slots.some((x) => !x.cls && !x.kept && !x.unset) && !notes.length) notes.push('No free time.');
   return { slots, notes };
 }
 const joinNodes = (nodes) => nodes.flatMap((n, i) => (i ? [', ', n] : [n]));
@@ -965,9 +1061,11 @@ function openMenu() {
     demo ? row('Exit the example', 'Back to your own tasks', () => { closeSheet(); exitDemo(); }, 'menu-exit-demo')
       : row('See an example day', 'Fictional — kept separate from your tasks', () => { closeSheet(); enterDemo(); }, 'demo-open'),
     row('Backup and data', 'Export, restore or delete', openDataSheet, 'menu-data'),
+    row('How to use Blockwise', 'The four steps, and what the buttons do', openHowTo, 'menu-howto'),
     row('Feedback', 'Questions to answer and copy', () => openSheet('Feedback', feedbackForm()), 'menu-feedback'),
     row('How Blockwise decides', null, () => openSheet('How Blockwise decides', rulesExplainer()), 'menu-rules'),
     row('Add to your Home Screen', null, openInstallHelp, 'menu-install'),
+    demo ? null : h('div', { class: 'menu-danger' }, row('Start over…', 'Delete everything on this phone and set up again', startOver, 'menu-reset')),
   ]);
 }
 
@@ -1478,6 +1576,7 @@ function bulkCapture(t) {
 
 // ===================== EDIT TASK =====================
 function openEditTask(id, focusField) {
+  markReviewed();
   const task = taskById(id);
   if (!task) return;
   const draft = {
@@ -1689,6 +1788,11 @@ async function deleteAll() {
     okLabel: 'Delete everything', danger: true,
   });
   if (!ok) return;
+  wipeEverything('All Blockwise data on this device was deleted.');
+}
+
+/** Remove every Blockwise record on this device (real data, example, unreadable copies) and go back to first use. */
+function wipeEverything(message) {
   try {
     for (let i = window.localStorage.length - 1; i >= 0; i--) {
       const k = window.localStorage.key(i);
@@ -1696,11 +1800,41 @@ async function deleteAll() {
     }
   } catch { /* storage unavailable: nothing persisted anyway */ }
   app.state = emptyState();
+  app.mode = 'real';
+  app.addDraft = null; app.addOpen = false;
   app.banners.unreadable = null; app.banners.saveError = null; app.blockSaves = false;
   closeSheet();
   app.planDate = today();
-  render();
-  toast('All Blockwise data on this device was deleted.');
+  go('today');
+  toast(message);
+}
+
+/** ⋯ → Start over…: say exactly what goes, offer a backup first, then reset to first use. */
+async function startOver() {
+  const st = app.state;
+  const open = st.tasks.filter((x) => x.status === 'open').length;
+  const done = st.tasks.length - open;
+  const out = h('div', { 'aria-live': 'polite' });
+  const items = [
+    `${st.tasks.length} task${st.tasks.length === 1 ? '' : 's'}${st.tasks.length ? ` (${open} open, ${done} finished)` : ''}`,
+    st.settings.school ? 'your classes, free blocks and week type' : null,
+    'your study hours and any changes to single days',
+    'the example day, if you opened it',
+  ].filter(Boolean);
+  closeSheet();
+  const ok = await confirmDialog({
+    title: 'Start over?',
+    body: [
+      h('p', {}, 'This deletes everything Blockwise has saved on this phone:'),
+      h('ul', { class: 'steps' }, ...items.map((x) => h('li', {}, x))),
+      h('p', {}, 'Then Blockwise opens like new. This can\'t be undone. Calendar reminders you already added stay in your calendar.'),
+      st.tasks.length ? button('Copy a backup first', () => copyBackup(out), 'btn-secondary btn-small', { 'data-key': 'reset-copy' }) : null,
+      out,
+    ],
+    okLabel: 'Delete and start over', cancelLabel: 'Cancel', danger: true,
+  });
+  if (!ok) { toast('Nothing was deleted.'); return; }
+  wipeEverything('Blockwise was reset. Start with step 1: your free blocks.');
 }
 
 // ---------- demo ----------

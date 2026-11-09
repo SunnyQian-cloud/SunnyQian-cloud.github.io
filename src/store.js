@@ -144,13 +144,15 @@ export function validateState(raw) {
       if (raw.settings.school != null) {
         const sc = raw.settings.school;
         const letters = ['A', 'B', 'C', 'D', 'E', 'F', 'G'];
+        // Before Nov 9, 2026 the non-ADB week was called 'BF'; it's the ECF week. Same alternation, new name.
+        const anchorType = isObj(sc) && isObj(sc.anchor) ? (sc.anchor.type === 'BF' ? 'ECF' : sc.anchor.type) : null;
         if (!isObj(sc) || sc.id !== 'middlesex' || !Array.isArray(sc.freeBlocks) || !sc.freeBlocks.every((b) => letters.includes(b)) ||
             (sc.freeExt != null && (!Array.isArray(sc.freeExt) || !sc.freeExt.every((b) => letters.map((l) => `${l}x`).includes(b)))) ||
             (sc.keepFree != null && (!Array.isArray(sc.keepFree) || !sc.keepFree.every((b) => letters.includes(b)))) ||
-            !isObj(sc.anchor) || !isValidISODate(sc.anchor.monday) || !['BF', 'ADB'].includes(sc.anchor.type)) {
+            !isObj(sc.anchor) || !isValidISODate(sc.anchor.monday) || !['ECF', 'ADB'].includes(anchorType)) {
           errors.push('School schedule settings are invalid.');
         } else {
-          settings.school = { id: sc.id, freeBlocks: [...new Set(sc.freeBlocks)].sort(), freeExt: [...new Set(sc.freeExt || [])].sort(), anchor: { monday: sc.anchor.monday, type: sc.anchor.type } };
+          settings.school = { id: sc.id, freeBlocks: [...new Set(sc.freeBlocks)].sort(), freeExt: [...new Set(sc.freeExt || [])].sort(), anchor: { monday: sc.anchor.monday, type: anchorType } };
           const keep = [...new Set(sc.keepFree || [])].filter((b) => sc.freeBlocks.includes(b)).sort();
           if (keep.length) settings.school.keepFree = keep;
         }

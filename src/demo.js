@@ -16,7 +16,7 @@ export function buildDemoState(today, nowIso = new Date().toISOString()) {
     schemaVersion: 1,
     settings: {
       studyStart: '19:30', studyStop: '21:30', sessionMin: 25,
-      school: { id: 'middlesex', freeBlocks: ['A', 'C'], freeExt: [], anchor: { monday, type: 'BF' } },
+      school: { id: 'middlesex', freeBlocks: ['A', 'C'], freeExt: [], anchor: { monday: '2026-10-19', type: 'ECF' } }, // real alternation: Oct 24 was an ECF Saturday
       week: {
         study: JSON.parse(JSON.stringify(MIDDLESEX.study)),
         items: [{ id: 'demo_practice', days: [1, 2, 3, 4, 5], start: '15:30', end: '17:30', kind: 'busy', label: 'Practice', category: 'activity' }],

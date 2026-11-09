@@ -36,7 +36,7 @@ export function mondayOf(date) {
   return addDays(date, -((weekdayOf(date) + 6) % 7));
 }
 
-/** Which school week type (e.g. 'BF' / 'ADB') a date falls in, alternating from the student's anchor week. */
+/** Which school week type (e.g. 'ECF' / 'ADB') a date falls in, alternating from the student's anchor week. */
 export function weekTypeFor(state, date) {
   const sc = state.settings && state.settings.school;
   const school = sc && SCHOOLS[sc.id];
@@ -80,7 +80,7 @@ export function schoolBlocksForDate(state, date) {
 
 /**
  * The student's classes on a date: school periods that aren't free, with each x block joined
- * to its letter when they touch (Saturday BF: Bx 9:05–9:30 + B 9:30–10:15 → B 9:05–10:15).
+ * to its letter when they touch (Tuesday: E 10:55–11:40 + Ex 11:40–12:05 → E 10:55–12:05).
  * Display only; the planner never uses class time.
  */
 export function classPeriodsForDate(state, date) {
@@ -103,7 +103,7 @@ export function classPeriodsForDate(state, date) {
 }
 
 /**
- * When a class block starts on a date ('HH:MM'), joining a touching x block (Saturday BF: Bx 9:05 + B → 9:05).
+ * When a class block starts on a date ('HH:MM'), joining a touching x block before it, if any.
  * null when there's no school schedule, no classes that day, or the block doesn't meet.
  */
 export function blockStartOn(state, date, letter) {
@@ -146,6 +146,28 @@ export function syncBlockDeadlines(state) {
     if (dl.time !== time) { dl.time = time; changed = true; }
   }
   return changed;
+}
+
+/**
+ * The timetable before the student has said which blocks are free: class blocks for a date, x blocks joined to
+ * their letter. Returns null when the classes depend on the week type (Saturday), [] when there are none.
+ * Display only — nothing is ever planned in a block whose availability isn't set.
+ */
+export function timetableForDate(date, schoolId = 'middlesex') {
+  const school = SCHOOLS[schoolId];
+  if (!school || !isValidISODate(date)) return [];
+  const wd = weekdayOf(date);
+  const versions = school.weekTypes.map((wt) => (school.grid[wt] && school.grid[wt][wd]) || []);
+  const key = (list) => list.map((p) => `${p.code}${p.start}${p.end}`).join('|');
+  if (versions.some((v) => key(v) !== key(versions[0]))) return null;
+  const out = [];
+  for (const p of [...versions[0]].sort((a, b) => a.start.localeCompare(b.start))) {
+    const letter = p.code[0], st = parseHM(p.start), en = parseHM(p.end);
+    const last = out[out.length - 1];
+    if (last && last.code === letter && st <= last.end) { last.end = Math.max(last.end, en); continue; }
+    out.push({ code: letter, start: st, end: en });
+  }
+  return out;
 }
 
 /** Dated items, school free blocks and usual-week items for a date (minus usual-week items switched off that date). */
