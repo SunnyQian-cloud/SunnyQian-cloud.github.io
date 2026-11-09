@@ -23,6 +23,8 @@ import {
 } from './store.js';
 import { buildDemoState, DEMO_CLOCK_MIN } from './demo.js';
 import { createVoiceController, VOICE_ERRORS, getRecognitionCtor } from './voice.js';
+import { ACTIVITY_KEY, readActivity, recordOpen, activityLines } from './activity.js';
+import { VERSION_LABEL } from './version.js';
 
 const DEMO_CLOCK_KEY = 'blockwise.demo.clock';
 const $ = (sel) => document.querySelector(sel);
@@ -272,14 +274,15 @@ function renderToday(week) {
     put(root, h('div', { class: 'empty' },
       h('p', {}, 'Add what\'s due — one line is enough, like “Bio test Tuesday, study 45 min”.'),
       app.mode === 'real' ? button('See an example day', enterDemo, 'btn-link') : null));
-    put(root, todayList(null, t));
+    put(root, doneToday(t));
     return;
   }
   if (!week) { put(root, h('p', { class: 'alert alert-danger' }, 'Something went wrong making your plan. Your tasks are safe.')); return; }
   const plan = week.days[0];
   put(root, nowCard(plan, t, week));
   put(root, alerts(plan, t));
-  put(root, todayList(plan, t));
+  put(root, doneToday(t));
+  put(root, todaySchedule(plan, t));
 }
 
 /** “BF week ⇄” — one tap to switch the alternation if a break threw it off. */
@@ -688,7 +691,7 @@ function taskLink(task, extra = null) {
 }
 
 /** Done today (ticked), then the rest of today's sessions, labelled by block. */
-function todayList(plan, t) {
+function doneToday(t) {
   const done = new Map();
   for (const task of app.state.tasks) {
     const worked = (task.progress || []).filter((p) => p.date === t).reduce((s, p) => s + p.workedMin, 0);
@@ -700,25 +703,32 @@ function todayList(plan, t) {
       h('span', { class: 'sl-main' }, taskLink(task), ' ', h('span', { class: 'check', 'aria-label': 'done' }, '✓')),
       h('span', { class: 'sl-meta' }, task.status === 'done' ? 'finished' : `${fmtDur(worked)} done`)));
   }
-  if (plan) {
-    const ns = nextSession(plan, app.state, now());
-    const nm = nowMin();
-    const skipped = new Set(daySettings(app.state, t).skipped);
-    let prevLabel = ns ? slotLabel(t, ns.item) : null;
-    for (const i of plan.items) {
-      if (i.type !== 'session' || i.end <= nm || (ns && i.id === ns.item.id) || skipped.has(i.taskId)) continue;
-      const task = taskById(i.taskId);
-      if (!task || task.status !== 'open') continue;
-      const label = slotLabel(t, i);
-      rows.push(h('li', {},
-        h('span', { class: 'sl-time' }, label && label !== prevLabel ? `${label} ${fmtT(i.start).replace(' ', ' ')}` : fmtT(i.start)),
-        h('span', { class: 'sl-main' }, taskLink(task)),
-        h('span', { class: 'sl-meta' }, `${i.minutes} m${i.purpose === 'ahead' ? ' · optional' : ''}`)));
-      prevLabel = label;
-    }
-  }
   if (!rows.length) return null;
-  return h('section', { class: 'list-section', 'aria-label': 'Rest of today' }, h('ol', { class: 'simple-list' }, ...rows));
+  return h('section', { class: 'list-section', 'aria-label': 'Done today' }, h('ol', { class: 'simple-list' }, ...rows));
+}
+
+/** The rest of today, block by block: the same rows as Week (classes, free blocks, study hours), from the block you're in. */
+function todaySchedule(plan, t) {
+  const nm = nowMin();
+  const skipped = new Set(daySettings(app.state, t).skipped);
+  const items = plan.items.filter((i) => i.type !== 'session' || (i.end > nm && !skipped.has(i.taskId) && taskById(i.taskId)?.status === 'open'));
+  const info = daySlots({ ...plan, items }, t);
+  const rows = info.slots.filter((sl) => sl.e > nm).map((sl) => (sl.s > nm ? sl
+    : { ...sl, now: true, freeTail: sl.items && sl.items.length ? Math.min(sl.freeTail, sl.e - nm) : sl.e - nm }));
+  if (!rows.length && !info.notes.length) return null;
+  const lis = rows.map((sl) => {
+    const li = slotRow(sl);
+    if (sl.now) {
+      li.classList.add('is-now');
+      li.querySelector('.slot-when').append(h('span', { class: 'now-tag' }, 'now'));
+    }
+    return li;
+  });
+  return h('section', { class: 'list-section', 'aria-label': 'Rest of today' },
+    h('div', { class: 'day-card today-card' },
+      h('h2', { class: 'today-card-title' }, 'Rest of today'),
+      lis.length ? h('ul', { class: 'slots' }, ...lis) : h('p', { class: 'day-note' }, 'Nothing left today.'),
+      ...info.notes.map((n) => h('p', { class: 'day-note' }, n))));
 }
 
 // ===================== WEEK =====================
@@ -961,6 +971,7 @@ function openMenu() {
     row('Feedback', 'Questions to answer and copy', () => openSheet('Feedback', feedbackForm()), 'menu-feedback'),
     row('How Blockwise decides', null, () => openSheet('How Blockwise decides', rulesExplainer()), 'menu-rules'),
     row('Add to your Home Screen', null, openInstallHelp, 'menu-install'),
+    h('p', { class: 'version-label', 'data-key': 'version' }, VERSION_LABEL),
   ]);
 }
 
@@ -1557,14 +1568,16 @@ const FEEDBACK_QUESTIONS = [
   'Anything else you\'d change?',
 ];
 /** Counts only (no task text), from data already on this device. Shown to the student before they copy it. */
-export function activitySummary(state, todayIso) {
+export function activitySummary(state, todayIso, activityRec = null) {
   const since = D.addDays(todayIso, -6);
   const inWeek = (d) => d && d >= since && d <= todayIso;
   const localDate = (iso) => { const x = new Date(iso); return Number.isNaN(x.getTime()) ? null : D.toISODate(x); };
   const tasks = state.tasks || [];
   const progressDays = new Set(tasks.flatMap((t) => (t.progress || []).map((p) => p.date)).filter(inWeek));
   return [
+    `${VERSION_LABEL}`,
     `Activity on this device, ${D.formatDate(since, todayIso)} – ${D.formatDate(todayIso, todayIso)} (counts only):`,
+    ...activityLines(activityRec, realToday()),
     `- Tasks added: ${tasks.filter((t) => inWeek(localDate(t.createdAt))).length}`,
     `- Days progress was logged: ${progressDays.size}`,
     `- Tasks completed: ${tasks.filter((t) => t.status === 'done' && inWeek(localDate(t.completedAt))).length}`,
@@ -1576,7 +1589,7 @@ function feedbackForm() {
   const areas = FEEDBACK_QUESTIONS.map((q) => { const id = uniqueId('fb'); return { q, id, ta: h('textarea', { id, rows: '2', maxlength: '1000' }) }; });
   const status = h('p', { class: 'hint', role: 'status' });
   const sumId = uniqueId('sum');
-  const summaryText = activitySummary(app.state, today());
+  const summaryText = activitySummary(app.state, today(), readActivity(store.get(ACTIVITY_KEY)));
   const summaryBox = h('pre', { class: 'summary-preview', hidden: true }, summaryText);
   const includeSummary = h('input', { type: 'checkbox', id: sumId, onchange: (e) => { summaryBox.hidden = !e.target.checked; } });
   return h('div', { class: 'stack' },
@@ -1685,7 +1698,7 @@ async function deleteAll() {
   try {
     for (let i = window.localStorage.length - 1; i >= 0; i--) {
       const k = window.localStorage.key(i);
-      if (k && (k === STORAGE_KEY || k.startsWith(UNREADABLE_PREFIX) || k === DEMO_KEY || k === MODE_KEY || k === DEMO_CLOCK_KEY)) window.localStorage.removeItem(k);
+      if (k && (k === STORAGE_KEY || k.startsWith(UNREADABLE_PREFIX) || k === DEMO_KEY || k === MODE_KEY || k === DEMO_CLOCK_KEY || k === ACTIVITY_KEY)) window.localStorage.removeItem(k);
     }
   } catch { /* storage unavailable: nothing persisted anyway */ }
   app.state = emptyState();
@@ -1722,6 +1735,7 @@ async function enterDemo() {
   store.set(DEMO_CLOCK_KEY, String(app.clockOffset));
   persist();
   app.planDate = today();
+  noteOpen();
   render();
   toast('Example day opened. This is the plan Blockwise made for it.');
 }
@@ -1731,6 +1745,7 @@ function exitDemo() {
   app.clockOffset = 0;
   loadReal();
   app.planDate = today();
+  noteOpen();
   render();
   toast('Back to your own data.');
 }
@@ -1739,6 +1754,17 @@ function toggleDemoClock() {
   store.set(DEMO_CLOCK_KEY, String(app.clockOffset));
   app.planDate = today();
   render();
+}
+
+// ---------- days opened (local only) ----------
+/** The real local date, ignoring the example's simulated clock. */
+const realToday = () => D.toISODate(new Date());
+/** Count today once for the current mode, only while Blockwise is actually on screen. */
+function noteOpen() {
+  if (typeof document === 'undefined' || document.visibilityState !== 'visible') return;
+  const rec = readActivity(store.get(ACTIVITY_KEY));
+  const next = recordOpen(rec, realToday(), app.mode);
+  if (next !== rec) store.set(ACTIVITY_KEY, JSON.stringify(next));
 }
 
 // ---------- startup ----------
@@ -1757,6 +1783,7 @@ function init() {
   window.addEventListener('pagehide', stopVoice);
   $('#sheet').addEventListener('click', (e) => { if (e.target === $('#sheet')) closeSheet(); });
   const tick = () => {
+    noteOpen();
     const t = today();
     if (t !== app.lastToday) {
       if (app.planDate === app.lastToday || app.planDate < t) app.planDate = t;
@@ -1769,6 +1796,7 @@ function init() {
   setInterval(tick, 30_000);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) tick(); });
   window.addEventListener('storage', (e) => { if (e.key === STORAGE_KEY && app.mode === 'real' && !$('#sheet').open) { loadReal(); render(); } });
+  noteOpen();
   render();
   document.documentElement.dataset.ready = 'true';
 }
