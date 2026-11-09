@@ -274,10 +274,12 @@ function renderToday(week) {
   if (app.mode === 'real' && !isStandalone() && isTouchDevice() && !state.prefs.homeScreenDismissed && state.tasks.length && !checklistOpen()) put(root, homeScreenCard(true));
   if (app.addOpen || app.addDraft || !open.length) put(root, addBox(open.length > 0));
   if (!open.length) {
+    const guided = (app.mode === 'real' && !state.settings.school && !state.prefs.setupNudgeDismissed) || checklistOpen();
     put(root, h('div', { class: 'empty' },
-      h('p', {}, 'Add what\'s due — one line is enough, like “Bio test Tuesday, study 45 min”.'),
+      guided ? null : h('p', {}, 'Add what\'s due — one line is enough, like “Bio test Tuesday, study 45 min”.'),
       app.mode === 'real' ? button('See an example day', enterDemo, 'btn-link') : null));
     put(root, doneToday(t));
+    if (week) put(root, todaySchedule(week.days[0], t)); // the day's timetable shows even before anything is added
     return;
   }
   if (!week) { put(root, h('p', { class: 'alert alert-danger' }, 'Something went wrong making your plan. Your tasks are safe.')); return; }
@@ -785,21 +787,26 @@ function todaySchedule(plan, t) {
   const items = plan.items.filter((i) => i.type !== 'session' || (i.end > nm && !skipped.has(i.taskId) && taskById(i.taskId)?.status === 'open'));
   const info = daySlots({ ...plan, items }, t);
   if (!info.slots.length && !info.notes.length) return null;
-  const lis = info.slots.map((sl) => {
+  const inProgress = info.slots.some((sl) => sl.s <= nm && sl.e > nm);
+  const nextIdx = inProgress ? -1 : info.slots.findIndex((sl) => sl.s > nm);
+  const lis = info.slots.map((sl, idx) => {
     const past = sl.e <= nm;
     const now = !past && sl.s <= nm;
+    const next = idx === nextIdx;
     const li = slotRow(past && !sl.cls && !sl.unset ? { ...sl, past: true } : (now ? { ...sl, freeTail: sl.items && sl.items.length ? Math.min(sl.freeTail, sl.e - nm) : sl.e - nm } : sl));
     if (past) li.classList.add('is-past');
-    if (now) {
+    if (now || next) {
       li.classList.add('is-now');
-      li.querySelector('.slot-when').append(h('span', { class: 'now-tag' }, 'now'));
+      li.querySelector('.slot-when').append(h('span', { class: 'now-tag' }, now ? 'now' : 'next'));
     }
     return li;
   });
+  const allOver = info.slots.length > 0 && info.slots.every((sl) => sl.e <= nm);
   return h('section', { class: 'list-section', 'aria-label': 'Today\'s blocks' },
     h('div', { class: 'day-card today-card' },
       h('h2', { class: 'today-card-title' }, 'Today\'s blocks'),
       lis.length ? h('ul', { class: 'slots' }, ...lis) : null,
+      allOver ? h('p', { class: 'day-note' }, 'No more scheduled blocks today.') : null,
       ...info.notes.map((n) => h('p', { class: 'day-note' }, n))));
 }
 // ===================== WEEK =====================
