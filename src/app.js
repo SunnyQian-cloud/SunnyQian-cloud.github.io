@@ -272,14 +272,15 @@ function renderToday(week) {
     put(root, h('div', { class: 'empty' },
       h('p', {}, 'Add what\'s due — one line is enough, like “Bio test Tuesday, study 45 min”.'),
       app.mode === 'real' ? button('See an example day', enterDemo, 'btn-link') : null));
-    put(root, todayList(null, t));
+    put(root, doneToday(t));
     return;
   }
   if (!week) { put(root, h('p', { class: 'alert alert-danger' }, 'Something went wrong making your plan. Your tasks are safe.')); return; }
   const plan = week.days[0];
   put(root, nowCard(plan, t, week));
   put(root, alerts(plan, t));
-  put(root, todayList(plan, t));
+  put(root, doneToday(t));
+  put(root, todaySchedule(plan, t));
 }
 
 /** “BF week ⇄” — one tap to switch the alternation if a break threw it off. */
@@ -688,7 +689,7 @@ function taskLink(task, extra = null) {
 }
 
 /** Done today (ticked), then the rest of today's sessions, labelled by block. */
-function todayList(plan, t) {
+function doneToday(t) {
   const done = new Map();
   for (const task of app.state.tasks) {
     const worked = (task.progress || []).filter((p) => p.date === t).reduce((s, p) => s + p.workedMin, 0);
@@ -700,27 +701,33 @@ function todayList(plan, t) {
       h('span', { class: 'sl-main' }, taskLink(task), ' ', h('span', { class: 'check', 'aria-label': 'done' }, '✓')),
       h('span', { class: 'sl-meta' }, task.status === 'done' ? 'finished' : `${fmtDur(worked)} done`)));
   }
-  if (plan) {
-    const ns = nextSession(plan, app.state, now());
-    const nm = nowMin();
-    const skipped = new Set(daySettings(app.state, t).skipped);
-    let prevLabel = ns ? slotLabel(t, ns.item) : null;
-    for (const i of plan.items) {
-      if (i.type !== 'session' || i.end <= nm || (ns && i.id === ns.item.id) || skipped.has(i.taskId)) continue;
-      const task = taskById(i.taskId);
-      if (!task || task.status !== 'open') continue;
-      const label = slotLabel(t, i);
-      rows.push(h('li', {},
-        h('span', { class: 'sl-time' }, label && label !== prevLabel ? `${label} ${fmtT(i.start).replace(' ', ' ')}` : fmtT(i.start)),
-        h('span', { class: 'sl-main' }, taskLink(task)),
-        h('span', { class: 'sl-meta' }, `${i.minutes} m${i.purpose === 'ahead' ? ' · optional' : ''}`)));
-      prevLabel = label;
-    }
-  }
   if (!rows.length) return null;
-  return h('section', { class: 'list-section', 'aria-label': 'Rest of today' }, h('ol', { class: 'simple-list' }, ...rows));
+  return h('section', { class: 'list-section', 'aria-label': 'Done today' }, h('ol', { class: 'simple-list' }, ...rows));
 }
 
+/** The rest of today, block by block: the same rows as Week (classes, free blocks, study hours), from the block you're in. */
+function todaySchedule(plan, t) {
+  const nm = nowMin();
+  const skipped = new Set(daySettings(app.state, t).skipped);
+  const items = plan.items.filter((i) => i.type !== 'session' || (i.end > nm && !skipped.has(i.taskId) && taskById(i.taskId)?.status === 'open'));
+  const info = daySlots({ ...plan, items }, t);
+  const rows = info.slots.filter((sl) => sl.e > nm).map((sl) => (sl.s > nm ? sl
+    : { ...sl, now: true, freeTail: sl.items && sl.items.length ? Math.min(sl.freeTail, sl.e - nm) : sl.e - nm }));
+  if (!rows.length && !info.notes.length) return null;
+  const lis = rows.map((sl) => {
+    const li = slotRow(sl);
+    if (sl.now) {
+      li.classList.add('is-now');
+      li.querySelector('.slot-when').append(h('span', { class: 'now-tag' }, 'now'));
+    }
+    return li;
+  });
+  return h('section', { class: 'list-section', 'aria-label': 'Rest of today' },
+    h('div', { class: 'day-card today-card' },
+      h('h2', { class: 'today-card-title' }, 'Rest of today'),
+      lis.length ? h('ul', { class: 'slots' }, ...lis) : h('p', { class: 'day-note' }, 'Nothing left today.'),
+      ...info.notes.map((n) => h('p', { class: 'day-note' }, n))));
+}
 // ===================== WEEK =====================
 // Each day lists its free blocks and study hours as rows: what Blockwise put there, or "Free".
 function renderWeek(week) {
