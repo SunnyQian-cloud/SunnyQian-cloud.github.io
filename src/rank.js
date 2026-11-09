@@ -37,7 +37,7 @@ function dueText(task, today) {
   const d = task.deadline;
   const rel = relativeDateLabel(d.date, today);
   const relLower = rel === 'Today' || rel === 'Tomorrow' ? rel.toLowerCase() : rel;
-  const at = d.time ? ` at ${formatTime12(deadlineMinutes(d))}` : '';
+  const at = d.block && d.time ? ` in ${d.block} block (${formatTime12(deadlineMinutes(d))})` : d.time ? ` at ${formatTime12(deadlineMinutes(d))}` : '';
   return task.kind === 'test' ? `Test ${relLower}${at}` : `Due ${relLower}${at}`;
 }
 

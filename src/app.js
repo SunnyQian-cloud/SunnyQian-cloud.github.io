@@ -7,10 +7,11 @@ import {
   KIND_LABELS, PRIORITY_LABELS, SESSION_CHOICES, SUGGESTED_MINUTES, BLOCK_CATEGORIES,
   bufferMinutes, neutralFirstStep, deadlineMeaning, newId, isSubstantial, lastWorkDate, plannedMinutes,
 } from './model.js';
-import { parseTaskText, parseBulk, validateDraft, draftToTask } from './parse.js';
+import { parseTaskText, parseBulk, validateDraft, draftToTask, makeDeadline } from './parse.js';
 import {
   buildPlan, buildWeek, nextSession, explainSession, daySettings, earliestStudyFn,
   blocksForDate, schoolBlocksForDate, classPeriodsForDate, weekTypeFor, mondayOf,
+  blockStartOn, classBlocksOn, syncBlockDeadlines,
 } from './plan.js';
 import { MIDDLESEX } from './schools/middlesex.js';
 import { buildReminderCalendar, reminderEvents } from './ics.js';
@@ -92,6 +93,7 @@ function persist() {
 /** Apply a change, save, re-render, and optionally announce. */
 function commit(mutate, message) {
   mutate(app.state);
+  syncBlockDeadlines(app.state);
   persist();
   render();
   if (message) toast(message);
@@ -124,12 +126,12 @@ function kindBadge(kind) { return h('span', { class: `badge badge-${kind}` }, KI
 function dueLabel(task, t = today()) {
   if (!task.deadline) return task.kind === 'test' ? 'No test date' : 'No deadline';
   const rel = D.relativeDateLabel(task.deadline.date, t);
-  const time = task.deadline.time ? ` at ${fmtT(D.parseHM(task.deadline.time))}` : ' (date only)';
+  const time = task.deadline.block ? ` in ${task.deadline.block} block` : task.deadline.time ? ` at ${fmtT(D.parseHM(task.deadline.time))}` : ' (date only)';
   return `${task.kind === 'test' ? 'Test' : 'Due'} ${['Today', 'Tomorrow', 'Yesterday'].includes(rel) ? rel.toLowerCase() : rel}${time}`;
 }
 function remainingLabel(task) {
   if (task.status === 'done') return 'Done';
-  const base = `${task.kind === 'test' ? 'Prep' : 'About'} ${fmtDur(task.remainingMin)} ${task.kind === 'test' ? 'still needed' : 'left'}`;
+  const base = `${task.kind === 'test' ? 'Study' : 'About'} ${fmtDur(task.remainingMin)} ${task.kind === 'test' ? 'still needed' : 'left'}`;
   const notes = [];
   if (task.estimateUncertain) notes.push('not sure');
   if (task.estimateSource === 'suggested') notes.push('suggested estimate');
@@ -207,6 +209,7 @@ function render() {
   renderBanners();
   renderNav();
   let week = null;
+  syncBlockDeadlines(app.state);
   try { week = buildWeek(app.state, { now: now() }); } catch (e) { console.error(e); }
   if (app.view === 'week') renderWeek(week); else renderToday(week);
   if (key || index >= 0) {
@@ -260,12 +263,14 @@ function renderToday(week) {
     school.noClasses ? h('span', { class: 'chip' }, 'No classes') : null,
     day.noStudy ? h('span', { class: 'chip' }, 'Busy tonight') : null));
 
-  if (app.mode === 'real' && !state.settings.school && !state.prefs.setupNudgeDismissed) put(root, setupCard());
   const open = state.tasks.filter((x) => x.status === 'open');
+  if (app.mode === 'real' && !isStandalone() && isTouchDevice() && !state.prefs.homeScreenDismissed) put(root, homeScreenCard(state.tasks.length > 0));
+  if (app.mode === 'real' && isStandalone() && !state.tasks.length && !state.prefs.bringOverDismissed) put(root, bringOverCard());
+  if (app.mode === 'real' && !state.settings.school && !state.prefs.setupNudgeDismissed) put(root, setupCard());
   if (app.addOpen || app.addDraft || !open.length) put(root, addBox(open.length > 0));
   if (!open.length) {
     put(root, h('div', { class: 'empty' },
-      h('p', {}, 'Add what\'s due — one line is enough, like “Bio test Tuesday, 45 min”.'),
+      h('p', {}, 'Add what\'s due — one line is enough, like “Bio test Tuesday, study 45 min”.'),
       app.mode === 'real' ? button('See an example day', enterDemo, 'btn-link') : null));
     put(root, todayList(null, t));
     return;
@@ -295,19 +300,25 @@ async function switchWeek(date, current) {
 
 // ---------- first-run setup (inline, two taps) ----------
 function setupCard() {
-  const free = new Set();
+  const free = new Set(), keep = new Set();
   let wk = null;
   const err = h('p', { class: 'field-error', role: 'alert' });
   const letters = h('div', { class: 'block-grid', role: 'group', 'aria-label': 'Free blocks' });
+  const keepBox = h('div', { class: 'block-grid', role: 'group', 'aria-label': 'Free blocks to keep free' });
+  const keepWrap = h('div', { hidden: true },
+    h('p', { class: 'setup-q' }, 'Keep any of them free for yourself?', h('span', { class: 'hint block' }, 'Optional. Blockwise won\'t plan work in these.')), keepBox);
   const weeks = h('div', { class: 'block-grid', role: 'group', 'aria-label': 'This week' });
   const draw = () => {
-    clear(letters); clear(weeks);
-    for (const L of MIDDLESEX.blocks) letters.append(h('button', { type: 'button', class: 'block-chip', 'aria-pressed': String(free.has(L)), onclick: () => { free.has(L) ? free.delete(L) : free.add(L); draw(); } }, L));
+    clear(letters); clear(weeks); clear(keepBox);
+    for (const L of MIDDLESEX.blocks) letters.append(h('button', { type: 'button', class: 'block-chip', 'aria-pressed': String(free.has(L)), onclick: () => { if (free.has(L)) { free.delete(L); keep.delete(L); } else free.add(L); draw(); } }, L));
+    for (const L of [...free].sort()) keepBox.append(h('button', { type: 'button', class: 'block-chip', 'aria-pressed': String(keep.has(L)), 'aria-label': `Keep ${L} block free`, onclick: () => { keep.has(L) ? keep.delete(L) : keep.add(L); draw(); } }, L));
+    keepWrap.hidden = !free.size;
     for (const w of MIDDLESEX.weekTypes) weeks.append(h('button', { type: 'button', class: 'block-chip wide', 'aria-pressed': String(wk === w), onclick: () => { wk = w; err.textContent = ''; draw(); } }, `${w} week`));
   };
   draw();
   return h('section', { class: 'setup', 'aria-label': 'Set up your classes' },
     h('p', { class: 'setup-q' }, 'Which blocks are free for you?'), letters,
+    keepWrap,
     h('p', { class: 'setup-q' }, 'Is this a BF or ADB week?', h('span', { class: 'hint block' }, 'Look at Saturday in your planner.')), weeks,
     err,
     h('div', { class: 'actions' },
@@ -315,6 +326,7 @@ function setupCard() {
         if (!wk) { err.textContent = 'Pick BF or ADB.'; return; }
         commit((s) => {
           s.settings.school = { id: 'middlesex', freeBlocks: [...free].sort(), freeExt: [], anchor: { monday: mondayOf(today()), type: wk } };
+          if (keep.size) s.settings.school.keepFree = [...keep].filter((L) => free.has(L)).sort();
           ensureWeek(s).study = JSON.parse(JSON.stringify(MIDDLESEX.study));
           s.prefs.setupNudgeDismissed = true;
         }, 'Saved. Your free blocks and study hours are in.');
@@ -325,7 +337,7 @@ function setupCard() {
 // ---------- add: type → one tappable line → Save ----------
 let voice = null;
 function addBox(canClose) {
-  const input = h('input', { id: 'add-input', type: 'text', maxlength: '300', autocomplete: 'off', enterkeyhint: 'done', placeholder: 'What\'s due? e.g. Bio test Tuesday, 45 min', 'aria-label': 'What\'s due?', 'data-key': 'add-input', oninput: (e) => { app.addText = e.target.value; } });
+  const input = h('input', { id: 'add-input', type: 'text', maxlength: '300', autocomplete: 'off', enterkeyhint: 'done', placeholder: 'What\'s due? e.g. Bio test Tuesday, study 45 min', 'aria-label': 'What\'s due?', 'data-key': 'add-input', oninput: (e) => { app.addText = e.target.value; } });
   input.value = app.addText;
   const voiceOk = !!getRecognitionCtor(window);
   const form = h('form', { class: 'add-form', novalidate: true, onsubmit: (e) => {
@@ -363,14 +375,22 @@ function svgEl(tag, attrs) {
 /** The review card, reduced to one line of tappable parts. Nothing is saved until Save. */
 function draftLine(d) {
   const t = today();
-  const due = d.deadlineDate ? `${d.kind === 'test' ? 'Test ' : 'Due '}${D.relativeDateLabel(d.deadlineDate, t)}${d.deadlineTime ? ` ${fmtT(D.parseHM(d.deadlineTime))}` : ''}` : 'No due date';
+  const due = d.deadlineDate ? `${d.kind === 'test' ? 'Test ' : 'Due '}${D.relativeDateLabel(d.deadlineDate, t)}${d.deadlineTime && !d.deadlineBlock ? ` ${fmtT(D.parseHM(d.deadlineTime))}` : ''}` : 'No due date';
   const guessTime = d.durationSource === 'suggested' && Number(d.remainingMin) === d.suggestedMin;
-  const chip = (label, onclick, extra = {}) => h('button', { type: 'button', class: ['draft-chip', extra.warn && 'is-warn'], onclick, 'aria-label': extra.aria }, label);
+  const test = d.kind === 'test';
+  const schoolSet = !!app.state.settings.school;
+  const blockStart = d.deadlineBlock && d.deadlineDate ? blockStartOn(app.state, d.deadlineDate, d.deadlineBlock) : null;
+  const blockOff = !!(d.deadlineBlock && d.deadlineDate && !blockStart);
+  const mins = fmtDur(Number(d.remainingMin) || 0);
+  const chip = (label, onclick, extra = {}) => h('button', { type: 'button', class: ['draft-chip', extra.warn && 'is-warn', extra.cls], onclick, 'aria-label': extra.aria }, label);
   const notes = [];
   const amb = d.flags.find((f) => (f.field === 'deadline' || f.field === 'deadlineTime') && (f.level === 'ambiguous' || f.level === 'warning') && !f.resolved);
   if (amb) notes.push(amb.message);
   else if (!d.deadlineDate) notes.push('No due date found. Tap it to add one, or save without.');
-  if (guessTime) notes.push(`${fmtDur(d.remainingMin)} is a guess — tap it to change.`);
+  if (blockOff) notes.push(schoolSet ? `${d.deadlineBlock} block doesn't meet that day, so it counts as due when the day starts. Tap it to pick another.` : `Set up your classes (⋯ → My classes) so Blockwise knows when ${d.deadlineBlock} block is.`);
+  const lengthFlag = d.flags.find((f) => f.field === 'duration' && /how long the test lasts/.test(f.message));
+  if (guessTime && lengthFlag) notes.push(`Read that as how long the test lasts, not study time. ${fmtDur(d.remainingMin)} of study is a guess — tap it to change.`);
+  else if (guessTime) notes.push(test ? `${fmtDur(d.remainingMin)} of study is a guess — tap it to change.` : `${fmtDur(d.remainingMin)} is a guess — tap it to change.`);
   const alt = amb && amb.alternatives && amb.alternatives[0];
   const v = validateDraft(d);
   return h('section', { class: 'draft', 'aria-label': 'Check before saving' },
@@ -378,7 +398,12 @@ function draftLine(d) {
       chip(d.title || 'Add a title', () => editDraftTitle(d), { aria: `Title: ${d.title || 'missing'}. Change`, warn: !d.title }),
       chip(KIND_LABELS[d.kind], () => { d.kind = d.kind === 'assignment' ? 'project' : d.kind === 'project' ? 'test' : 'assignment'; if (guessTime) { d.suggestedMin = SUGGESTED_MINUTES[d.kind]; d.remainingMin = d.suggestedMin; } render(); }, { aria: `Type: ${KIND_LABELS[d.kind]}. Tap to change` }),
       chip(due, () => editDraftDue(d), { aria: `${due}. Change`, warn: !d.deadlineDate || !!amb }),
-      chip(`${guessTime ? '~' : ''}${fmtDur(Number(d.remainingMin) || 0)}${guessTime ? '?' : ''}`, () => editDraftTime(d), { aria: `Time needed: ${fmtDur(Number(d.remainingMin) || 0)}${guessTime ? ', a guess' : ''}. Change`, warn: guessTime })),
+      d.deadlineDate && (schoolSet || d.deadlineBlock)
+        ? chip(d.deadlineBlock ? `${d.deadlineBlock} block` : '+ Block', () => openBlockPicker(d.deadlineDate, d.kind, d.deadlineBlock, (L) => { d.deadlineBlock = L; if (L) d.deadlineTime = null; for (const f of d.flags) if (f.field === 'deadlineTime') f.resolved = true; render(); }),
+          { aria: d.deadlineBlock ? `${d.deadlineBlock} block. Change` : 'Block: add the class it\'s in', warn: blockOff, cls: !d.deadlineBlock && 'is-quiet' })
+        : null,
+      chip(test ? `Study ${guessTime ? '~' : ''}${mins}${guessTime ? '?' : ''}` : `${guessTime ? '~' : ''}${mins}${guessTime ? '?' : ''} of work`, () => editDraftTime(d),
+        { aria: `${test ? `Study ${mins}` : `${mins} of work`}${guessTime ? ', a guess' : ''}. Change`, warn: guessTime })),
     notes.length ? h('p', { class: 'draft-note' }, notes.join(' '),
       alt ? button(alt.date ? `Use ${alt.label}` : `Use ${alt.label}`, () => {
         if (alt.date) d.deadlineDate = alt.date;
@@ -415,29 +440,46 @@ function editDraftDue(d) {
   const dId = uniqueId('dd'), tId = uniqueId('dtm');
   const dateIn = h('input', { id: dId, type: 'date', value: d.deadlineDate || '' });
   const timeIn = h('input', { id: tId, type: 'time', value: d.deadlineTime || '' });
-  const set = (date) => { d.deadlineDate = date; d.deadlineTime = timeIn.value || null; for (const f of d.flags) if (f.field.startsWith('deadline')) f.resolved = true; closeSheet(); render(); };
+  const set = (date) => { d.deadlineDate = date; d.deadlineTime = timeIn.value || null; if (d.deadlineTime) d.deadlineBlock = null; for (const f of d.flags) if (f.field.startsWith('deadline')) f.resolved = true; closeSheet(); render(); };
   const picks = [0, 1, 2, 3, 4, 5, 6, 7].map((n) => D.addDays(t, n));
   openSheet(d.kind === 'test' ? 'Test date' : 'Due date', [
     h('div', { class: 'quick-chips' }, ...picks.map((p, i) => button(i === 0 ? 'Today' : i === 1 ? 'Tomorrow' : D.formatDate(p, t), () => set(p), 'chip-btn'))),
     h('div', { class: 'grid-2' },
       h('div', { class: 'field' }, h('label', { for: dId }, 'Other date'), dateIn),
       h('div', { class: 'field' }, h('label', { for: tId }, 'Time (optional)'), timeIn)),
-    h('p', { class: 'hint' }, 'Without a time, it counts as due when the school day starts, so the work happens the day before.'),
+    h('p', { class: 'hint' }, 'Without a time or block, it counts as due when the school day starts, so the work happens the day before. You can pick the class block next.'),
     h('div', { class: 'actions' },
       button('Use this date', () => { if (D.isValidISODate(dateIn.value)) set(dateIn.value); else dateIn.focus(); }, 'btn-primary'),
-      button('No due date', () => { d.deadlineDate = null; d.deadlineTime = null; for (const f of d.flags) if (f.field.startsWith('deadline')) f.resolved = true; closeSheet(); render(); }, 'btn-ghost')),
+      button('No due date', () => { d.deadlineDate = null; d.deadlineTime = null; d.deadlineBlock = null; for (const f of d.flags) if (f.field.startsWith('deadline')) f.resolved = true; closeSheet(); render(); }, 'btn-ghost')),
   ]);
 }
 
 function editDraftTime(d) {
   const id = uniqueId('dm');
+  const test = d.kind === 'test';
   const inp = h('input', { id, type: 'number', inputmode: 'numeric', min: '1', max: '1440', value: d.remainingMin });
   const set = (m) => { d.remainingMin = m; d.durationSource = 'text'; closeSheet(); render(); };
-  openSheet('How long will it take?', [
+  openSheet(test ? 'How long do you need to study?' : 'How long will it take?', [
+    test ? h('p', { class: 'hint' }, 'All the studying you still need before the test — not how long the test lasts.') : null,
     h('div', { class: 'quick-chips' }, ...[15, 30, 45, 60, 90, 120, 180].map((m) => button(fmtDur(m), () => set(m), 'chip-btn'))),
     h('form', { class: 'stack', novalidate: true, onsubmit: (e) => { e.preventDefault(); const m = Number(inp.value); if (Number.isInteger(m) && m > 0 && m <= 1440) set(m); else inp.focus(); } },
-      h('div', { class: 'field' }, h('label', { for: id }, 'Minutes'), inp),
+      h('div', { class: 'field' }, h('label', { for: id }, test ? 'Minutes of study' : 'Minutes'), inp),
       h('div', { class: 'actions' }, h('button', { type: 'submit', class: 'btn btn-primary' }, 'Use this'))),
+  ]);
+}
+
+/** "Which block is it in?" — classes that meet that day (not the student's free blocks), with start times. */
+function openBlockPicker(date, kind, current, onPick) {
+  const t = today();
+  const classes = classBlocksOn(app.state, date);
+  const schoolSet = !!app.state.settings.school;
+  openSheet(kind === 'test' ? 'Which block is the test in?' : 'Which class is it due in?', [
+    h('p', { class: 'hint' }, `${D.formatDate(date, t)}. Work is planned to finish before that class starts, so free blocks earlier that day count too.`),
+    classes.length
+      ? h('div', { class: 'quick-chips', role: 'group', 'aria-label': 'Class blocks' }, ...classes.map((c) =>
+        button(`${c.letter} block · ${fmtT(D.parseHM(c.start))}`, () => { closeSheet(); onPick(c.letter); }, ['chip-btn', current === c.letter && 'is-on'].filter(Boolean).join(' '), { 'aria-pressed': String(current === c.letter) })))
+      : h('p', {}, schoolSet ? 'You have no classes that day.' : 'Set up your classes first: ⋯ → My classes.'),
+    h('div', { class: 'actions' }, button('Not in a class', () => { closeSheet(); onPick(null); }, 'btn-ghost')),
   ]);
 }
 
@@ -535,7 +577,7 @@ function nowLine(plan, item, task) {
   else if (task.deadline) {
     const rel = D.relativeDateLabel(task.deadline.date, t);
     const when = ['Today', 'Tomorrow'].includes(rel) ? rel.toLowerCase() : rel;
-    parts.push(`${task.kind === 'test' ? 'Test' : 'Due'} ${when}${task.deadline.time ? ` at ${fmtT(D.parseHM(task.deadline.time))}` : ''}.`);
+    parts.push(`${task.kind === 'test' ? 'Test' : 'Due'} ${when}${task.deadline.block ? ` in ${task.deadline.block} block` : task.deadline.time ? ` at ${fmtT(D.parseHM(task.deadline.time))}` : ''}.`);
   } else parts.push('No due date, so it uses spare time.');
   parts.push(`${item.minutes} min of ${fmtDur(task.remainingMin)} left.`);
   if (info.tier === 'urgent' && !info.late && info.cutoffMin == null) {
@@ -639,6 +681,12 @@ function openOverflowHelp() {
   ]);
 }
 
+/** A task's name as a button that opens it (edit, mark done, delete). */
+function taskLink(task, extra = null) {
+  return h('button', { type: 'button', class: 'task-link', onclick: () => openEditTask(task.id) }, task.title,
+    task.kind === 'test' ? h('span', { class: 'tag-test' }, 'test') : null, extra);
+}
+
 /** Done today (ticked), then the rest of today's sessions, labelled by block. */
 function todayList(plan, t) {
   const done = new Map();
@@ -649,7 +697,7 @@ function todayList(plan, t) {
   const rows = [];
   for (const { task, worked } of done.values()) {
     rows.push(h('li', { class: 'is-done' },
-      h('span', { class: 'sl-main' }, task.title, ' ', h('span', { class: 'check', 'aria-label': 'done' }, '✓')),
+      h('span', { class: 'sl-main' }, taskLink(task), ' ', h('span', { class: 'check', 'aria-label': 'done' }, '✓')),
       h('span', { class: 'sl-meta' }, task.status === 'done' ? 'finished' : `${fmtDur(worked)} done`)));
   }
   if (plan) {
@@ -664,7 +712,7 @@ function todayList(plan, t) {
       const label = slotLabel(t, i);
       rows.push(h('li', {},
         h('span', { class: 'sl-time' }, label && label !== prevLabel ? `${label} ${fmtT(i.start).replace(' ', ' ')}` : fmtT(i.start)),
-        h('span', { class: 'sl-main' }, task.title),
+        h('span', { class: 'sl-main' }, taskLink(task)),
         h('span', { class: 'sl-meta' }, `${i.minutes} m${i.purpose === 'ahead' ? ' · optional' : ''}`)));
       prevLabel = label;
     }
@@ -681,10 +729,10 @@ function renderWeek(week) {
   put(root, h('div', { class: 'week-head' },
     h('h1', { id: 'week-title', tabindex: '-1' }, 'This week'),
     h('p', { class: 'lead' }, 'Your free blocks and study hours, filled in for you.'),
-    h('p', { class: 'hint' }, 'This updates by itself as you add things or tap Done and Not now. Tap a day for a day off or a busy evening.')));
+    h('p', { class: 'hint' }, 'This updates by itself as you add things or tap Done and Not now. Tap a day for a day off or a busy evening, or a free block to keep it free.')));
   if (!week) { put(root, h('p', { class: 'alert alert-danger' }, 'Something went wrong making your plan. Your tasks are safe.')); return; }
   const open = app.state.tasks.filter((x) => x.status === 'open');
-  const name = (x) => h('button', { type: 'button', class: 'task-link', onclick: () => openEditTask(x.id) }, x.title, x.kind === 'test' ? h('span', { class: 'tag-test' }, 'test') : null);
+  const name = (x) => taskLink(x, x.deadline && x.deadline.block ? h('span', { class: 'muted small' }, ` · ${x.deadline.block} block`) : null);
   const list = h('ol', { class: 'week-list' });
   for (let i = 1; i < week.days.length; i++) {
     const plan = week.days[i];
@@ -718,6 +766,14 @@ function renderWeek(week) {
 }
 
 function slotRow(sl) {
+  const nameEl = sl.letter
+    ? h('button', { type: 'button', class: 'slot-name slot-btn', onclick: () => openBlockSheet(sl.date, sl.letter), 'aria-label': `${sl.name}, ${fmtRange(sl.s, sl.e)}. ${sl.kept ? 'Kept free' : 'Free'}. Change` }, sl.name)
+    : h('span', { class: 'slot-name' }, sl.name);
+  if (sl.kept) {
+    return h('li', { class: 'slot is-kept' },
+      h('div', { class: 'slot-when' }, nameEl, h('span', { class: 'slot-time' }, fmtRange(sl.s, sl.e))),
+      h('div', { class: 'slot-what' }, h('span', { class: 'class-label' }, sl.kept === 'always' ? 'Kept free' : 'Kept free this day')));
+  }
   if (sl.cls) {
     return h('li', { class: 'slot is-class' },
       h('div', { class: 'slot-when' }, h('span', { class: 'slot-name' }, sl.name)),
@@ -725,9 +781,9 @@ function slotRow(sl) {
   }
   const free = !sl.items.length;
   return h('li', { class: ['slot', free && 'is-free'] },
-    h('div', { class: 'slot-when' }, h('span', { class: 'slot-name' }, sl.name), h('span', { class: 'slot-time' }, fmtRange(sl.s, sl.e))),
+    h('div', { class: 'slot-when' }, nameEl, h('span', { class: 'slot-time' }, fmtRange(sl.s, sl.e))),
     h('div', { class: 'slot-what' },
-      ...sl.items.map((m) => h('p', { class: 'slot-task' }, taskById(m.taskId)?.title || 'Task', h('span', { class: 'mins' }, fmtShort(m.minutes)))),
+      ...sl.items.map((m) => { const task = taskById(m.taskId); return h('p', { class: 'slot-task' }, task ? taskLink(task) : 'Task', h('span', { class: 'mins' }, fmtShort(m.minutes))); }),
       free ? h('span', { class: 'free-pill' }, 'Free')
         : sl.freeTail >= 15 ? h('span', { class: 'free-pill' }, `Free · ${fmtShort(sl.freeTail)}`) : null));
 }
@@ -743,7 +799,7 @@ function daySlots(plan, date) {
     const s = D.parseHM(b.start), e = D.parseHM(b.end);
     const last = slots[slots.length - 1];
     if (last && s <= last.e && last.school && b.school) { last.e = Math.max(last.e, e); continue; }
-    slots.push({ s, e, name: b.school ? b.label.replace(/x block$/, ' block') : (b.label || 'Free time'), school: b.school });
+    slots.push({ s, e, name: b.school ? b.label.replace(/x block$/, ' block') : (b.label || 'Free time'), school: b.school, letter: b.school ? b.letter : null, date });
   }
   if (ds.studyStart) slots.push({ s: D.parseHM(ds.studyStart), e: D.parseHM(ds.studyStop), name: 'Study hours' });
   const sessions = plan.items.filter((i) => i.type === 'session');
@@ -757,12 +813,20 @@ function daySlots(plan, date) {
     const lastEnd = inside.reduce((m, i) => Math.max(m, i.end), sl.s);
     sl.freeTail = inside.length ? sl.e - lastEnd : sl.e - sl.s;
   }
+  const kept = [];
+  for (const b of [...school.kept].sort((a, c) => a.start.localeCompare(c.start))) {
+    const s = D.parseHM(b.start), e = D.parseHM(b.end);
+    const last = kept[kept.length - 1];
+    if (last && s <= last.e && last.letter === b.letter) { last.e = Math.max(last.e, e); continue; }
+    kept.push({ s, e, name: `${b.letter} block`, letter: b.letter, date, kept: b.keptWhy, items: [] });
+  }
+  slots.push(...kept);
   for (const c of classPeriodsForDate(st, date)) slots.push({ s: c.start, e: c.end, name: `${c.code} block`, cls: true });
   slots.sort((a, c) => a.s - c.s);
   const notes = [];
   if (school.noClasses) notes.push('No classes this day.');
   if (!ds.studyStart) notes.push(ds.noStudy ? 'Busy that evening.' : 'No study hours.');
-  if (!slots.some((x) => !x.cls) && !notes.length) notes.push('No free time.');
+  if (!slots.some((x) => !x.cls && !x.kept) && !notes.length) notes.push('No free time.');
   return { slots, notes };
 }
 const joinNodes = (nodes) => nodes.flatMap((n, i) => (i ? [', ', n] : [n]));
@@ -781,6 +845,37 @@ function openDaySheet(date) {
     h('div', { class: 'field' }, h('span', { class: 'field-label' }, 'Add free time that day'),
       h('div', { class: 'quick-chips' }, ...[['Morning', '09:00', '12:00'], ['Afternoon', '13:00', '17:00']].map(([l, s, e]) =>
         button(`${l} ${fmtRange(D.parseHM(s), D.parseHM(e))}`, () => { closeSheet(); addFreeTime(date, l, s, e); }, 'chip-btn')))),
+  ]);
+}
+
+/** One free block on one day: keep it free that day, or always. */
+function openBlockSheet(date, letter) {
+  const st = app.state;
+  const t = today();
+  const always = ((st.settings.school && st.settings.school.keepFree) || []).includes(letter);
+  const skipped = ((st.days[date] && st.days[date].skipBlocks) || []).includes(letter);
+  const dayName = date === t ? 'today' : `on ${D.weekdayName(date, true)}`;
+  const idDay = uniqueId('sw'), idAll = uniqueId('sw');
+  const daySwitch = h('input', { type: 'checkbox', role: 'switch', id: idDay, checked: !skipped && !always, disabled: always, onchange: (e) => {
+    commit((s) => {
+      const rec = (s.days[date] ||= {});
+      const set = new Set(rec.skipBlocks || []);
+      if (e.target.checked) set.delete(letter); else set.add(letter);
+      if (set.size) rec.skipBlocks = [...set].sort(); else delete rec.skipBlocks;
+    }, e.target.checked ? `${letter} block is back in the plan ${dayName}.` : `${letter} block kept free ${dayName}.`);
+  } });
+  const allSwitch = h('input', { type: 'checkbox', role: 'switch', id: idAll, checked: always, onchange: (e) => {
+    commit((s) => {
+      const set = new Set(s.settings.school.keepFree || []);
+      if (e.target.checked) set.add(letter); else set.delete(letter);
+      if (set.size) s.settings.school.keepFree = [...set].sort(); else delete s.settings.school.keepFree;
+    }, e.target.checked ? `${letter} block is kept free every week.` : `${letter} block is used for work again.`);
+    daySwitch.disabled = e.target.checked;
+    daySwitch.checked = !e.target.checked && !((app.state.days[date] && app.state.days[date].skipBlocks) || []).includes(letter);
+  } });
+  openSheet(`${letter} block · ${D.formatDate(date, t)}`, [
+    h('label', { class: 'switch-row', for: idDay }, daySwitch, h('span', {}, h('strong', {}, `Plan work in ${letter} block ${dayName}`), h('span', { class: 'muted small block' }, 'Turn off to keep it free just this once.'))),
+    h('label', { class: 'switch-row', for: idAll }, allSwitch, h('span', {}, h('strong', {}, `Always keep ${letter} block free`), h('span', { class: 'muted small block' }, 'For lunch, a club, or time off. Blockwise won\'t plan work in it any week.'))),
   ]);
 }
 
@@ -829,16 +924,33 @@ function openMenu() {
     const id = uniqueId('sw');
     return h('label', { class: 'switch-row', for: id }, h('input', { type: 'checkbox', role: 'switch', id, checked, onchange }), h('span', {}, h('strong', {}, label), h('span', { class: 'muted small block' }, sub)));
   };
+  const openCount = st.tasks.filter((x) => x.status === 'open').length;
+  const todayLetters = school.configured ? [...new Set([...school.blocks, ...school.kept.filter((b) => b.keptWhy === 'day')].map((b) => b.letter))].sort() : [];
+  const skippedToday = new Set(day.skipBlocks || []);
   openSheet('Menu', [
+    row('All tasks', openCount ? `${openCount} open · change, finish or delete` : 'Change, finish or delete', () => openAllTasks(), 'menu-all'),
     h('h3', { class: 'small-heading' }, 'Today'),
     school.configured ? sw('No classes today', 'Day off or special schedule', school.noClasses, (e) => commit(() => { if (e.target.checked) dayRecord(t).noClasses = true; else delete dayRecord(t).noClasses; }, e.target.checked ? 'No classes today.' : 'Classes back on.')) : null,
     sw('Busy tonight', 'No study hours tonight (game, rehearsal, event)', !!day.noStudy, (e) => commit(() => { if (e.target.checked) dayRecord(t).noStudy = true; else delete dayRecord(t).noStudy; }, e.target.checked ? 'Tonight is off.' : 'Study hours back on tonight.')),
+    todayLetters.length ? h('div', { class: 'field' }, h('span', { class: 'field-label', id: 'keep-today-label' }, 'Keep a free block free today'),
+      h('div', { class: 'quick-chips', role: 'group', 'aria-labelledby': 'keep-today-label' }, ...todayLetters.map((L) => h('button', {
+        type: 'button', class: 'block-chip', 'aria-pressed': String(skippedToday.has(L)), 'data-key': `keep-today-${L}`,
+        onclick: (e) => {
+          const on = e.currentTarget.getAttribute('aria-pressed') !== 'true';
+          e.currentTarget.setAttribute('aria-pressed', String(on));
+          commit((s2) => {
+            const rec = (s2.days[t] ||= {});
+            const set = new Set(rec.skipBlocks || []);
+            if (on) set.add(L); else set.delete(L);
+            if (set.size) rec.skipBlocks = [...set].sort(); else delete rec.skipBlocks;
+          }, on ? `${L} block kept free today.` : `${L} block is back in today's plan.`);
+        } }, L)))) : null,
     h('div', { class: 'field' }, h('span', { class: 'field-label' }, 'Add free time today'),
       h('div', { class: 'quick-chips' }, ...[['Morning', '09:00', '12:00'], ['Afternoon', '13:00', '17:00']].map(([l, s, e]) =>
         button(`${l} ${fmtRange(D.parseHM(s), D.parseHM(e))}`, () => { closeSheet(); addFreeTime(t, l, s, e); }, 'chip-btn')),
         button('Other time…', () => openBlockEditor({ date: t, kind: 'free' }), 'chip-btn'))),
     h('h3', { class: 'small-heading' }, 'Set up'),
-    row('My classes', st.settings.school ? `Free blocks ${st.settings.school.freeBlocks.join(', ') || 'none'} · ${weekTypeFor(st, t)} week` : 'Tap your free blocks', openSchoolSetup, 'menu-classes'),
+    row('My classes', st.settings.school ? `Free blocks ${st.settings.school.freeBlocks.join(', ') || 'none'}${(st.settings.school.keepFree || []).length ? ` (${st.settings.school.keepFree.join(', ')} kept free)` : ''} · ${weekTypeFor(st, t)} week` : 'Tap your free blocks', openSchoolSetup, 'menu-classes'),
     row('Study hours', studyHoursSummary().join(' · '), openStudyHoursEditor, 'menu-study'),
     row('Reminders', 'Phone alerts before free blocks and study hours', () => { closeSheet(); openReminders(); }, 'menu-reminders'),
     row('Paste a list of tasks', 'Several at once, checked before saving', () => openCapture({ bulk: true }), 'menu-bulk'),
@@ -856,10 +968,67 @@ function addFreeTime(date, label, start, end) {
   commit((s) => { s.blocks.push({ id: newId('b'), date, start, end, label: `${label} free time`, kind: 'free', category: 'free' }); }, `${label} free time added.`);
 }
 
+/** Every task in one place: tap to change, finish or delete. */
+function openAllTasks() {
+  const t = today();
+  const key = (x) => (x.deadline ? `${x.deadline.date} ${String(x.deadline.time ? D.parseHM(x.deadline.time) : 0).padStart(4, '0')}` : '9999');
+  const open = app.state.tasks.filter((x) => x.status === 'open').sort((a, b) => key(a).localeCompare(key(b)) || a.title.localeCompare(b.title));
+  const done = app.state.tasks.filter((x) => x.status === 'done').sort((a, b) => String(b.completedAt || '').localeCompare(String(a.completedAt || ''))).slice(0, 30);
+  const row = (x) => h('li', {}, h('button', { type: 'button', class: 'task-row', onclick: () => openEditTask(x.id) },
+    h('span', { class: 'task-row-title' }, x.title, x.kind === 'test' ? h('span', { class: 'tag-test' }, 'test') : null),
+    h('span', { class: 'task-row-meta' }, x.status === 'done' ? 'Finished · tap to reopen or delete' : `${dueLabel(x, t)} · ${remainingLabel(x)}`)));
+  openSheet('All tasks', [
+    open.length ? h('ul', { class: 'task-list', 'aria-label': 'Open tasks' }, ...open.map(row)) : h('p', { class: 'muted' }, 'Nothing to do yet. Add something with + Add.'),
+    open.length ? h('p', { class: 'hint' }, 'Tap a task to change it, mark it done, or delete it.') : null,
+    done.length ? h('details', { class: 'disclosure-plain' }, h('summary', {}, `Finished (${done.length})`), h('ul', { class: 'task-list', 'aria-label': 'Finished tasks' }, ...done.map(row))) : null,
+  ]);
+}
+
+// ---------- Home Screen ----------
+const isStandalone = () => (typeof matchMedia === 'function' && matchMedia('(display-mode: standalone)').matches) || navigator.standalone === true;
+const isTouchDevice = () => (typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches) || /iPhone|iPad|iPod|Android/.test(navigator.userAgent || '');
+
+/** Before (or soon after) a student adds work in a phone browser: their plan only lives on this phone. */
+function homeScreenCard(hasTasks) {
+  return h('section', { class: 'callout-card', 'aria-label': 'Add to your Home Screen' },
+    h('p', { class: 'callout-title' }, hasTasks ? 'Keep your plan safe: add Blockwise to your Home Screen' : 'First, add Blockwise to your Home Screen'),
+    h('p', { class: 'small' }, 'Your plan is saved only on this phone. Safari can erase a website\'s saved data if you don\'t open it for about a week. Opened from your Home Screen, it stays.'),
+    h('div', { class: 'actions' },
+      button('Show me how', openInstallHelp, 'btn-primary btn-small', { 'data-key': 'hs-how' }),
+      button('Not now', () => commit((s) => { s.prefs.homeScreenDismissed = true; }, 'You can find this later in ⋯ → Add to your Home Screen.'), 'btn-ghost btn-small', { 'data-key': 'hs-later' })));
+}
+
+/** First open from the Home Screen on an iPhone starts empty: offer to bring tasks over from Safari. */
+function bringOverCard() {
+  return h('section', { class: 'callout-card', 'aria-label': 'Bring your plan over' },
+    h('p', { class: 'callout-title' }, 'Used Blockwise in Safari before?'),
+    h('p', { class: 'small' }, 'The Home Screen app keeps its own copy, so it starts empty. In Safari, open Blockwise → ⋯ → Add to your Home Screen → Copy my plan. Then paste it here.'),
+    h('div', { class: 'actions' },
+      button('Paste my plan', openBringOver, 'btn-primary btn-small', { 'data-key': 'bring-over' }),
+      button('Start fresh', () => commit((s) => { s.prefs.bringOverDismissed = true; }), 'btn-ghost btn-small')));
+}
+
+function openBringOver() {
+  const out = h('div', { 'aria-live': 'polite' });
+  openSheet('Bring your plan over', [pasteRestore(out, { open: true }), out]);
+}
+
 function openInstallHelp() {
+  const hasTasks = app.mode === 'real' && app.state.tasks.length > 0;
+  const out = h('div', { 'aria-live': 'polite' });
   openSheet('Add to your Home Screen', [
-    h('p', {}, 'iPhone (Safari): Share → Add to Home Screen. Android (Chrome): ⋮ menu → Add to Home screen.'),
-    h('p', { class: 'small muted' }, 'It\'s only a shortcut: it doesn\'t back up your data or send reminders. On some phones the icon opens a separate copy with its own storage — if your tasks don\'t appear there, export a backup and import it there.'),
+    h('p', {}, 'Your plan is saved only on this phone, not online. Safari can erase a website\'s saved data if you don\'t open it for about a week. Opened from your Home Screen, it stays.'),
+    h('h3', { class: 'small-heading' }, 'iPhone or iPad (Safari)'),
+    h('ol', { class: 'steps' },
+      h('li', {}, 'Tap the Share button (the square with an arrow).'),
+      h('li', {}, 'Scroll down, tap Add to Home Screen, then Add.'),
+      h('li', {}, 'From now on, open Blockwise from the new icon.')),
+    h('h3', { class: 'small-heading' }, 'Android (Chrome)'),
+    h('p', {}, 'Tap ⋮, then Add to Home screen (or Install app). Your tasks come with it.'),
+    hasTasks ? h('h3', { class: 'small-heading' }, 'Already added tasks here?') : null,
+    hasTasks ? h('p', {}, 'On iPhone, the Home Screen app starts empty. Copy your plan first. Then open the new icon, tap Paste my plan, and paste.') : null,
+    hasTasks ? button('Copy my plan', () => copyBackup(out), 'btn-secondary', { 'data-key': 'copy-plan' }) : null,
+    out,
   ]);
 }
 
@@ -930,15 +1099,20 @@ function openSchoolSetup() {
   const sc = app.state.settings.school;
   const free = new Set(sc ? sc.freeBlocks : []);
   const ext = new Set(sc ? sc.freeExt : []);
+  const keep = new Set(sc ? sc.keepFree || [] : []);
   const t = today();
   const current = sc ? weekTypeFor(app.state, t) : null;
   const letterBox = h('div', { class: 'block-grid', role: 'group', 'aria-label': 'Free blocks' });
   const extBox = h('div', { class: 'block-grid', role: 'group', 'aria-label': 'Extension blocks you don\'t attend' });
+  const keepBox = h('div', { class: 'block-grid', role: 'group', 'aria-label': 'Free blocks to keep free' });
+  const keepNone = h('p', { class: 'hint' }, 'Pick your free blocks first.');
   const renderChips = () => {
-    clear(letterBox); clear(extBox);
+    clear(letterBox); clear(extBox); clear(keepBox);
     for (const L of MIDDLESEX.blocks) {
-      letterBox.append(h('button', { type: 'button', class: 'block-chip', 'aria-pressed': String(free.has(L)), onclick: () => { free.has(L) ? free.delete(L) : free.add(L); renderChips(); } }, L));
+      letterBox.append(h('button', { type: 'button', class: 'block-chip', 'aria-pressed': String(free.has(L)), onclick: () => { if (free.has(L)) { free.delete(L); keep.delete(L); } else free.add(L); renderChips(); } }, L));
     }
+    for (const L of [...free].sort()) keepBox.append(h('button', { type: 'button', class: 'block-chip', 'aria-pressed': String(keep.has(L)), 'aria-label': `Keep ${L} block free`, onclick: () => { keep.has(L) ? keep.delete(L) : keep.add(L); renderChips(); } }, L));
+    keepNone.hidden = free.size > 0;
     for (const L of MIDDLESEX.blocks) {
       const x = `${L}x`;
       if (free.has(L)) continue;
@@ -957,6 +1131,8 @@ function openSchoolSetup() {
       const useStudy = e.target.querySelector(`#${useStudyId}`).checked;
       commit((s) => {
         s.settings.school = { id: 'middlesex', freeBlocks: [...free].sort(), freeExt: [...ext].filter((x) => !free.has(x[0])).sort(), anchor: { monday: mondayOf(t), type: picked.value } };
+        const kf = [...keep].filter((L) => free.has(L)).sort();
+        if (kf.length) s.settings.school.keepFree = kf;
         if (useStudy) ensureWeek(s).study = JSON.parse(JSON.stringify(MIDDLESEX.study));
         s.prefs.setupNudgeDismissed = true;
       }, 'Classes saved. Your free blocks now count as study time.');
@@ -966,6 +1142,10 @@ function openSchoolSetup() {
       h('legend', {}, '1. Which blocks are free for you?'),
       h('p', { class: 'hint' }, 'Tap every letter where you have no class. Leave the rest.'),
       letterBox),
+    h('fieldset', { class: 'field' },
+      h('legend', {}, 'Keep any free block for yourself? (optional)'),
+      h('p', { class: 'hint' }, 'Tap a free block you\'d rather not use for work — lunch, a club, time off. You can also keep a block free for one day from Week.'),
+      keepNone, keepBox),
     h('details', { class: 'disclosure-plain' },
       h('summary', {}, 'Extension (x) blocks you don\'t attend (optional)'),
       h('p', { class: 'hint' }, 'If you have class in a block but skip its extension, tap it here. Extensions of your free blocks are already free.'),
@@ -1136,8 +1316,25 @@ function taskFields(draft, { compact = false, showFlags = true, idPrefix = uniqu
     } }), h('span', {}, KIND_LABELS[k]))));
   const dateLabel = h('label', { for: id('date') });
   const timeLabel = h('label', { for: id('time') });
-  const dateIn = h('input', { id: id('date'), type: 'date', value: draft.deadlineDate || '', disabled, 'aria-describedby': `${id('meaning')} ${id('deadlineDate-err')}`, onchange: (e) => { draft.deadlineDate = e.target.value || null; resolveFlags('deadline'); updateMeaning(); } });
-  const timeIn = h('input', { id: id('time'), type: 'time', value: draft.deadlineTime || '', disabled, 'aria-describedby': `${id('meaning')} ${id('deadlineTime-err')}`, onchange: (e) => { draft.deadlineTime = e.target.value || null; resolveFlags('deadlineTime'); updateMeaning(); } });
+  const dateIn = h('input', { id: id('date'), type: 'date', value: draft.deadlineDate || '', disabled, 'aria-describedby': `${id('meaning')} ${id('deadlineDate-err')}`, onchange: (e) => { draft.deadlineDate = e.target.value || null; resolveFlags('deadline'); fillBlocks(); updateMeaning(); } });
+  const timeIn = h('input', { id: id('time'), type: 'time', value: draft.deadlineBlock ? '' : (draft.deadlineTime || ''), disabled: disabled || !!draft.deadlineBlock, 'aria-describedby': `${id('meaning')} ${id('deadlineTime-err')}`, onchange: (e) => { draft.deadlineTime = e.target.value || null; if (draft.deadlineTime) { draft.deadlineBlock = null; fillBlocks(); } resolveFlags('deadlineTime'); updateMeaning(); } });
+  const blockLabel = h('label', { for: id('block') });
+  const blockSel = h('select', { id: id('block'), disabled, onchange: (e) => {
+    draft.deadlineBlock = e.target.value || null;
+    if (draft.deadlineBlock) { draft.deadlineTime = null; timeIn.value = ''; }
+    timeIn.disabled = disabled || !!draft.deadlineBlock;
+    updateMeaning();
+  } });
+  const showBlocks = !!app.state.settings.school || !!draft.deadlineBlock;
+  function fillBlocks() {
+    clear(blockSel);
+    blockSel.append(h('option', { value: '' }, 'No block'));
+    const classes = draft.deadlineDate ? classBlocksOn(app.state, draft.deadlineDate) : [];
+    for (const c of classes) blockSel.append(h('option', { value: c.letter }, `${c.letter} block (${fmtT(D.parseHM(c.start))})`));
+    if (draft.deadlineBlock && !classes.some((c) => c.letter === draft.deadlineBlock)) blockSel.append(h('option', { value: draft.deadlineBlock }, `${draft.deadlineBlock} block (doesn't meet that day)`));
+    blockSel.value = draft.deadlineBlock || '';
+  }
+  fillBlocks();
   const meaning = h('p', { class: 'hint', id: id('meaning') });
   const minLabel = h('label', { for: id('min') });
   const minIn = h('input', { id: id('min'), type: 'number', inputmode: 'numeric', min: '1', max: '1440', step: '1', value: draft.remainingMin ?? '', disabled, 'aria-describedby': `${id('min-hint')} ${id('remainingMin-err')}`, oninput: (e) => { draft.remainingMin = e.target.value === '' ? '' : Number(e.target.value); updateSuggestedTag(); } });
@@ -1155,16 +1352,19 @@ function taskFields(draft, { compact = false, showFlags = true, idPrefix = uniqu
     const test = draft.kind === 'test';
     dateLabel.textContent = test ? 'Test date' : 'Due date';
     timeLabel.textContent = test ? 'Test time (optional)' : 'Due time (optional)';
-    minLabel.textContent = test ? 'Prep time still needed (estimate, minutes)' : 'Time still needed (estimate, minutes)';
+    minLabel.textContent = test ? 'Study time still needed (estimate, minutes)' : 'Time still needed (estimate, minutes)';
+    blockLabel.textContent = test ? 'Which block is the test in? (optional)' : 'Due in a class block? (optional)';
     stepIn.placeholder = neutralFirstStep(draft.kind);
     stepHint.textContent = `Optional. If empty, big tasks show a neutral step: “${neutralFirstStep(draft.kind)}”`;
     updateMeaning();
   }
   function updateMeaning() {
-    const dl = draft.deadlineDate ? { date: draft.deadlineDate, time: draft.deadlineTime || null } : null;
+    const dl = draft.deadlineDate ? (draft.deadlineBlock
+      ? { date: draft.deadlineDate, block: draft.deadlineBlock, time: blockStartOn(app.state, draft.deadlineDate, draft.deadlineBlock) }
+      : { date: draft.deadlineDate, time: draft.deadlineTime || null }) : null;
     let text = deadlineMeaning(dl, draft.kind);
     if (dl) text = `${D.isValidISODate(dl.date) ? D.formatDate(dl.date, today()) : ''}. ${text}`;
-    if (draft.kind === 'test') text += ' The time below is the prep you still need, not the test itself.';
+    if (draft.kind === 'test') text += ' The minutes below are study time, not how long the test lasts.';
     meaning.textContent = text;
   }
   function updateSuggestedTag() {
@@ -1182,8 +1382,9 @@ function taskFields(draft, { compact = false, showFlags = true, idPrefix = uniqu
     h('div', { class: 'grid-2' },
       h('div', { class: 'field' }, dateLabel, dateIn, errorEl('deadlineDate')),
       h('div', { class: 'field' }, timeLabel, timeIn, errorEl('deadlineTime'))),
+    showBlocks ? h('div', { class: 'field' }, blockLabel, blockSel) : null,
     h('div', { class: 'deadline-meta' }, meaning,
-      button(draft.kind === 'test' ? 'No test date' : 'No deadline', () => { draft.deadlineDate = null; draft.deadlineTime = null; dateIn.value = ''; timeIn.value = ''; resolveFlags('deadline'); resolveFlags('deadlineTime'); updateMeaning(); }, 'btn-link btn-small', { disabled })),
+      button(draft.kind === 'test' ? 'No test date' : 'No deadline', () => { draft.deadlineDate = null; draft.deadlineTime = null; draft.deadlineBlock = null; dateIn.value = ''; timeIn.value = ''; timeIn.disabled = disabled; fillBlocks(); resolveFlags('deadline'); resolveFlags('deadlineTime'); updateMeaning(); }, 'btn-link btn-small', { disabled })),
     h('div', { class: 'field' }, h('div', { class: 'label-row' }, minLabel, suggestedTag), minIn,
       compact ? null : h('div', { class: 'quick-chips', 'aria-label': 'Quick estimates' }, ...[15, 30, 45, 60, 90, 120].map((m) => button(fmtDur(m), () => { draft.remainingMin = m; minIn.value = String(m); updateSuggestedTag(); }, 'chip-btn', { disabled, 'aria-label': `Set estimate to ${fmtDur(m)}` }))),
       minHint, errorEl('remainingMin')),
@@ -1274,6 +1475,7 @@ function openEditTask(id, focusField) {
   if (!task) return;
   const draft = {
     title: task.title, kind: task.kind, deadlineDate: task.deadline ? task.deadline.date : null, deadlineTime: task.deadline ? task.deadline.time : null,
+    deadlineBlock: task.deadline && task.deadline.block ? task.deadline.block : null,
     remainingMin: task.remainingMin, estimateUncertain: task.estimateUncertain, priority: task.priority, firstStep: task.firstStep,
     durationSource: task.estimateSource === 'suggested' ? 'suggested' : 'text', suggestedMin: task.estimateSource === 'suggested' ? task.remainingMin : null,
     flags: [], original: null,
@@ -1298,7 +1500,7 @@ function openEditTask(id, focusField) {
       const x = taskById(id);
       const mins = Number(draft.remainingMin);
       x.title = draft.title.trim(); x.kind = draft.kind;
-      x.deadline = draft.deadlineDate ? { date: draft.deadlineDate, time: draft.deadlineTime || null } : null;
+      x.deadline = draft.deadlineDate ? makeDeadline(draft.deadlineDate, draft.deadlineTime, draft.deadlineBlock) : null;
       if (mins !== x.remainingMin) x.estimateSource = 'user';
       x.remainingMin = mins; x.estimateUncertain = !!draft.estimateUncertain;
       x.priority = draft.priority; x.firstStep = (draft.firstStep || '').trim();
@@ -1337,8 +1539,9 @@ async function deleteTask(id) {
 function rulesExplainer() {
   return h('div', { class: 'rules small' },
     h('ol', {},
-      h('li', {}, h('strong', {}, 'Free time. '), 'Your free class blocks, plus study hours (Sun–Thu 7:30–9:30, Fri 7:30–9:00 at Middlesex), minus anything you mark busy. Nothing is planned after your study hours end.'),
-      h('li', {}, h('strong', {}, 'Due dates. '), 'Without a time, something counts as due when the school day starts, so “due tomorrow” means doing it today.'),
+      h('li', {}, h('strong', {}, 'Free time. '), 'Your free class blocks, plus study hours (Sun–Thu 7:30–9:30, Fri 7:30–9:00 at Middlesex), minus anything you mark busy or keep free. Nothing is planned after your study hours end.'),
+      h('li', {}, h('strong', {}, 'Due dates. '), 'Without a time or block, something counts as due when the school day starts, so “due tomorrow” means doing it today. In a block (“Friday, D block”), it\'s due when that class starts, so free blocks earlier that day count.'),
+      h('li', {}, h('strong', {}, 'Tests. '), 'The minutes on a test are study time, not how long the test lasts.'),
       h('li', {}, h('strong', {}, 'What comes first. '), 'Work whose last chance is today. If two things are both due tomorrow, they take turns so neither gets squeezed out. Next: big tasks that need 30+ minutes a day or haven\'t been started. Short tasks don\'t jump the line just for being short.'),
       h('li', {}, h('strong', {}, 'Sessions. '), '25 minutes with short breaks, never shorter than 15 minutes unless that finishes the task.'),
       h('li', {}, h('strong', {}, 'Honesty. '), 'If something won\'t fit before it\'s due, Blockwise says so. Overdue work isn\'t planned unless you say you\'re still doing it. It plans one day at a time, so it can\'t promise later deadlines will fit.'),
@@ -1419,10 +1622,10 @@ async function handleImportFile(file, out, input) {
   await handleImportText(text, out);
 }
 
-function pasteRestore(out) {
+function pasteRestore(out, { open = false } = {}) {
   const id = uniqueId('paste');
   const ta = h('textarea', { id, rows: '3', placeholder: '{"app":"Blockwise", …}' });
-  return h('details', { class: 'disclosure-plain' },
+  return h('details', { class: 'disclosure-plain', open },
     h('summary', {}, 'Restore from pasted backup text'),
     h('div', { class: 'field' }, h('label', { for: id }, 'Paste the text from “Copy backup text”'), ta),
     button('Check and restore', () => handleImportText(ta.value, out), 'btn-secondary'));

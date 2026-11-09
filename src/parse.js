@@ -77,9 +77,50 @@ function parseDuration(state) {
     const suffix = m[m.length - 1] || '';
     const uncertain = (typeof res === 'object' && res.range) || UNCERTAIN_WORDS.test(prefix + ' ' + suffix);
     consume(state, m);
-    return { minutes: Math.min(min, 24 * 60), uncertain, raw: m[0].trim(), tooLong: min > 24 * 60 };
+    return { minutes: Math.min(min, 24 * 60), uncertain, raw: m[0].trim(), tooLong: min > 24 * 60, start: m.index, end: m.index + m[0].length };
   }
   return null;
+}
+
+/**
+ * Words around a duration that say what it measures. "study 45 min" / "45 min of prep" → study time
+ * (the words are removed from the title). "45 min long" / "test length 45 min" / "45 min test" → how
+ * long the test itself lasts, which is NOT study time.
+ */
+function durationContext(state, dur) {
+  const before = state.work.slice(0, dur.start);
+  const after = state.work.slice(dur.end);
+  const take = (start, end) => consume(state, { index: start, 0: state.work.slice(start, end) });
+  const lengthBefore = /\b(?:test|exam|quiz)?\s*(?:length|lasts?|is)\s*(?:of|is|for)?\s*[:=]?\s*$/.exec(before);
+  const lengthAfter = /^\s*-?\s*(?:long\b|(?:test|exam|quiz)\b)/.exec(after);
+  if (lengthAfter && /long/.test(lengthAfter[0])) { take(dur.end, dur.end + lengthAfter[0].length); return 'length'; }
+  if (lengthBefore && /length|last/.test(lengthBefore[0])) { take(dur.start - lengthBefore[0].length, dur.start); return 'length'; }
+  if (lengthAfter) return 'length'; // "45 min test": keep the word "test" in the title
+  let study = false;
+  // Only at the start of the line or after punctuation, so "SAT prep 2 hours" keeps "prep" in the title.
+  const sb = /(?:^|[,;:\-–—(]\s*|\band\s+)((?:study(?:ing)?|prep(?:ping|aring)?|review(?:ing)?)(?:\s+time)?(?:\s+for)?\s*[:=]?\s*)$/.exec(before);
+  if (sb) { take(dur.start - sb[1].length, dur.start); study = true; }
+  const sa = /^\s*(?:of\s+)?(?:study(?:ing)?|prep|review)(?:\s+time)?\b/.exec(after);
+  if (sa) { take(dur.end, dur.end + sa[0].length); study = true; }
+  if (study) {
+    // "study 30 min for Spanish quiz" → title "Spanish quiz"
+    const rest = state.work.slice(dur.end);
+    const fr = /^\s*for\b/.exec(rest);
+    if (fr) take(dur.end, dur.end + fr[0].length);
+  }
+  return study ? 'study' : null;
+}
+
+/** "D block" / "block D" / "in D block": the class block a test (or due work) is in. */
+function parseBlock(state, original) {
+  const m = find(state, '\\b(?:(?:in|during)\\s+)?(?:([a-g])\\s*-?\\s*block|block\\s+([a-g]))\\b');
+  if (!m) return null;
+  const letter = (m[1] || m[2]);
+  const at = m.index + m[0].indexOf(letter, m[0].search(/[a-g]\s*-?\s*block|block\s+[a-g]/));
+  // "a block of problems" is not A block: a lone "a" must be typed as a capital.
+  if (letter === 'a' && original[at] !== 'A') return null;
+  consume(state, m);
+  return letter.toUpperCase();
 }
 
 // ---------- times ----------
@@ -283,7 +324,7 @@ export function parseTaskText(input, today) {
     original,
     title: '',
     kind: 'assignment', kindSource: 'default',
-    deadlineDate: null, deadlineTime: null, deadlineSource: null,
+    deadlineDate: null, deadlineTime: null, deadlineBlock: null, deadlineSource: null,
     remainingMin: null, durationSource: null, suggestedMin: null,
     estimateUncertain: false,
     priority: 'normal', prioritySource: 'default',
@@ -308,8 +349,16 @@ export function parseTaskText(input, today) {
   const p = parsePriority(state);
   if (p) { draft.priority = p; draft.prioritySource = 'text'; }
 
-  // 3. Duration
-  const dur = parseDuration(state);
+  // 3. Duration (+ whether it's study time or how long the test lasts)
+  let dur = parseDuration(state);
+  let testLength = null;
+  if (dur) {
+    const ctx = durationContext(state, dur);
+    if (ctx === 'length') { testLength = dur; dur = null; }
+  }
+
+  // 3b. Class block ("D block")
+  const block = parseBlock(state, original);
 
   // 4. Deadline (+ attached time) and any standalone time
   const dl = parseDeadline(state, today);
@@ -353,6 +402,12 @@ export function parseTaskText(input, today) {
     flag(state, 'deadline', 'ambiguous', `Couldn't read “${dl.invalid}” as a real date. Pick a date or keep it undated.`);
   }
 
+  if (block) {
+    draft.deadlineBlock = block;
+    if (time) { flag(state, 'deadlineTime', 'info', `Used ${block} block for the time, not ${formatTime12(time.minutes)}.`); time = null; }
+    if (!draft.deadlineDate) flag(state, 'deadline', 'missing', `Found ${block} block but no ${dlWord}. Add the date.`);
+  }
+
   if (time) {
     draft.deadlineTime = formatHM(time.minutes);
     if (time.ambiguous) {
@@ -379,9 +434,9 @@ export function parseTaskText(input, today) {
   if (draft.deadlineDate) {
     const diff = daysBetween(today, draft.deadlineDate);
     if (diff < 0) flag(state, 'deadline', 'warning', `${formatDate(draft.deadlineDate, today)} has already passed. Check the date.`);
-    else if (diff === 0 && !draft.deadlineTime) flag(state, 'deadlineTime', 'warning', 'Due today with no time. Date-only deadlines count as due at the start of the day — add the time it\'s due so Blockwise can plan before it.');
+    else if (diff === 0 && !draft.deadlineTime && !draft.deadlineBlock) flag(state, 'deadlineTime', 'warning', 'Due today with no time. Date-only deadlines count as due at the start of the day — add the time it\'s due so Blockwise can plan before it.');
     else if (diff > 180) flag(state, 'deadline', 'warning', `${formatDate(draft.deadlineDate, today)} is more than six months away. Check the date.`);
-    if (dl && dl.timeMissing && diff > 0) flag(state, 'deadlineTime', 'info', 'If it\'s due at a specific time that day, add it.');
+    if (dl && dl.timeMissing && diff > 0 && !draft.deadlineBlock) flag(state, 'deadlineTime', 'info', 'If it\'s due at a specific time that day, add it.');
   }
 
   // Duration outcomes
@@ -396,7 +451,9 @@ export function parseTaskText(input, today) {
     draft.remainingMin = draft.suggestedMin;
     draft.durationSource = 'suggested';
     draft.estimateUncertain = true;
-    flag(state, 'duration', 'missing', `No time estimate found. ${draft.suggestedMin} min is a starting guess, not from your text — change it if you know better.`);
+    flag(state, 'duration', 'missing', testLength
+      ? `Read “${testLength.raw}” as how long the test lasts, not study time. ${draft.suggestedMin} min of study is a starting guess — change it if you know better.`
+      : `No time estimate found. ${draft.suggestedMin} min is a starting guess, not from your text — change it if you know better.`);
   }
 
   // Title
@@ -443,12 +500,19 @@ export function validateDraft(d) {
     if (parseHM(d.deadlineTime) == null) errors.deadlineTime = 'Enter a time like 23:59.';
     else if (!d.deadlineDate) errors.deadlineTime = 'Add a date for this time, or clear the time.';
   }
+  if (d.deadlineBlock != null && !BLOCK_LETTERS.includes(d.deadlineBlock)) errors.deadlineBlock = 'Pick a block from A to G.';
   const mins = Number(d.remainingMin);
   if (d.remainingMin === '' || d.remainingMin == null || !Number.isFinite(mins) || mins <= 0 || !Number.isInteger(mins)) {
     errors.remainingMin = 'Enter whole minutes (1 or more).';
   } else if (mins > 24 * 60) errors.remainingMin = 'Keep estimates to 24 hours or less — split bigger work.';
   if (String(d.firstStep ?? '').length > 200) errors.firstStep = 'Keep the first step under 200 characters.';
   return { ok: Object.keys(errors).length === 0, errors };
+}
+
+const BLOCK_LETTERS = ['A', 'B', 'C', 'D', 'E', 'F', 'G'];
+/** A stored deadline. With a block, the time is filled in from the timetable when the plan is made. */
+export function makeDeadline(date, time, block) {
+  return block ? { date, time: null, block } : { date, time: time || null };
 }
 
 /** Convert a validated draft into a stored task. */
@@ -458,7 +522,7 @@ export function draftToTask(d, nowIso) {
     id: newId('t'),
     title: String(d.title).trim(),
     kind: d.kind,
-    deadline: d.deadlineDate ? { date: d.deadlineDate, time: d.deadlineTime || null } : null,
+    deadline: d.deadlineDate ? makeDeadline(d.deadlineDate, d.deadlineTime, d.deadlineBlock) : null,
     remainingMin: mins,
     estimateUncertain: !!d.estimateUncertain,
     estimateSource: d.durationSource === 'suggested' && mins === d.suggestedMin ? 'suggested' : 'user',

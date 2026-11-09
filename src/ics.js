@@ -41,7 +41,8 @@ export function reminderEvents(state, today) {
     const free = new Set([...sc.freeBlocks, ...sc.freeBlocks.map((b) => `${b}x`), ...(sc.freeExt || [])]);
     for (const type of school.weekTypes) {
       for (let wd = 0; wd < 7; wd++) {
-        const periods = (school.grid[type][wd] || []).filter((p) => free.has(p.code));
+        const keep = new Set(sc.keepFree || []);
+        const periods = (school.grid[type][wd] || []).filter((p) => free.has(p.code) && !keep.has(p.code[0]));
         // Days identical in both week types get one weekly event (made from the first week type only).
         const sameBoth = JSON.stringify(school.grid[school.weekTypes[0]][wd]) === JSON.stringify(school.grid[school.weekTypes[1]][wd]);
         if (sameBoth && type !== school.weekTypes[0]) continue;

@@ -15,6 +15,7 @@ export function emptyState() {
   return { schemaVersion: SCHEMA_VERSION, settings: { ...DEFAULT_SETTINGS }, tasks: [], blocks: [], days: {}, plans: {}, prefs: {} };
 }
 
+const BLOCK_LETTERS = ['A', 'B', 'C', 'D', 'E', 'F', 'G'];
 const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const isStr = (v, max = 10000) => typeof v === 'string' && v.length <= max;
 const isInt = (v, lo, hi) => Number.isInteger(v) && v >= lo && v <= hi;
@@ -33,6 +34,10 @@ function cleanTask(t, i, errors) {
     if (!isObj(t.deadline) || !isValidISODate(t.deadline.date)) return bad('invalid deadline date.');
     if (t.deadline.time != null && !isHM(t.deadline.time)) return bad('invalid deadline time.');
     deadline = { date: t.deadline.date, time: t.deadline.time ?? null };
+    if (t.deadline.block != null) {
+      if (!BLOCK_LETTERS.includes(t.deadline.block)) return bad('invalid class block.');
+      deadline.block = t.deadline.block;
+    }
   }
   if (!isInt(t.remainingMin, 0, 1440)) return bad('invalid remaining minutes.');
   if (!PRIORITIES.includes(t.priority)) return bad('invalid priority.');
@@ -141,10 +146,13 @@ export function validateState(raw) {
         const letters = ['A', 'B', 'C', 'D', 'E', 'F', 'G'];
         if (!isObj(sc) || sc.id !== 'middlesex' || !Array.isArray(sc.freeBlocks) || !sc.freeBlocks.every((b) => letters.includes(b)) ||
             (sc.freeExt != null && (!Array.isArray(sc.freeExt) || !sc.freeExt.every((b) => letters.map((l) => `${l}x`).includes(b)))) ||
+            (sc.keepFree != null && (!Array.isArray(sc.keepFree) || !sc.keepFree.every((b) => letters.includes(b)))) ||
             !isObj(sc.anchor) || !isValidISODate(sc.anchor.monday) || !['BF', 'ADB'].includes(sc.anchor.type)) {
           errors.push('School schedule settings are invalid.');
         } else {
           settings.school = { id: sc.id, freeBlocks: [...new Set(sc.freeBlocks)].sort(), freeExt: [...new Set(sc.freeExt || [])].sort(), anchor: { monday: sc.anchor.monday, type: sc.anchor.type } };
+          const keep = [...new Set(sc.keepFree || [])].filter((b) => sc.freeBlocks.includes(b)).sort();
+          if (keep.length) settings.school.keepFree = keep;
         }
       }
       if (raw.settings.week != null) {
@@ -181,6 +189,10 @@ export function validateState(raw) {
       }
       if (d.noStudy != null) { if (typeof d.noStudy === 'boolean') { if (d.noStudy) out.noStudy = true; } else errors.push(`Busy-tonight flag for ${date} is invalid.`); }
       if (d.noClasses != null) { if (typeof d.noClasses === 'boolean') { if (d.noClasses) out.noClasses = true; } else errors.push(`No-class flag for ${date} is invalid.`); }
+      if (d.skipBlocks != null) {
+        if (Array.isArray(d.skipBlocks) && d.skipBlocks.every((b) => BLOCK_LETTERS.includes(b))) { if (d.skipBlocks.length) out.skipBlocks = [...new Set(d.skipBlocks)].sort(); }
+        else errors.push(`Kept-free blocks for ${date} are invalid.`);
+      }
       if (d.off != null) {
         if (Array.isArray(d.off) && d.off.every(isId)) out.off = [...new Set(d.off)];
         else errors.push(`Usual-week changes for ${date} are invalid.`);

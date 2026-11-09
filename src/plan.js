@@ -1,5 +1,5 @@
 // Builds a day plan: rank (rank.js) → allocate minutes in bounded passes → place (schedule.js).
-import { localParts, parseHM, formatTime12, formatDuration, roundUpTo, toISODate, weekdayOf, addDays, daysBetween } from './dates.js';
+import { localParts, parseHM, formatHM, isValidISODate, formatTime12, formatDuration, roundUpTo, toISODate, weekdayOf, addDays, daysBetween } from './dates.js';
 import { SCHOOLS } from './schools/middlesex.js';
 import { DEFAULT_SETTINGS, effectiveSessionLength, MIN_SESSION, KIND_LABELS } from './model.js';
 import { rankTasks } from './rank.js';
@@ -57,19 +57,25 @@ export function weekTypeFor(state, date) {
 export function schoolBlocksForDate(state, date) {
   const sc = state.settings && state.settings.school;
   const school = sc && SCHOOLS[sc.id];
-  if (!school) return { blocks: [], weekType: null, unknown: false, noClasses: false, configured: false };
+  if (!school) return { blocks: [], kept: [], weekType: null, unknown: false, noClasses: false, configured: false };
   const day = (state.days && state.days[date]) || {};
   const weekType = weekTypeFor(state, date);
   const noClasses = !!day.noClasses || school.calendar.noClassDates.includes(date);
-  if (noClasses) return { blocks: [], weekType, unknown: false, noClasses: true, configured: true };
+  if (noClasses) return { blocks: [], kept: [], weekType, unknown: false, noClasses: true, configured: true };
   const periods = school.grid[weekType] ? school.grid[weekType][weekdayOf(date)] : null;
-  if (periods == null) return { blocks: [], weekType, unknown: true, noClasses: false, configured: true };
+  if (periods == null) return { blocks: [], kept: [], weekType, unknown: true, noClasses: false, configured: true };
   const free = new Set([...sc.freeBlocks, ...sc.freeBlocks.map((b) => `${b}x`), ...(sc.freeExt || [])]);
-  const blocks = periods.filter((p) => free.has(p.code)).map((p) => ({
-    id: `s_${p.code}_${p.start.replace(':', '')}`, date, start: p.start, end: p.end,
-    label: `${p.code} block`, kind: 'free', category: 'free', school: true,
-  }));
-  return { blocks, weekType, unknown: false, noClasses: false, configured: true };
+  const always = new Set(sc.keepFree || []);
+  const skipDay = new Set(Array.isArray(day.skipBlocks) ? day.skipBlocks : []);
+  const blocks = [], kept = [];
+  for (const p of periods.filter((x) => free.has(x.code))) {
+    const b = { id: `s_${p.code}_${p.start.replace(':', '')}`, date, start: p.start, end: p.end,
+      label: `${p.code} block`, letter: p.code[0], kind: 'free', category: 'free', school: true };
+    if (always.has(b.letter)) kept.push({ ...b, keptWhy: 'always' });
+    else if (skipDay.has(b.letter)) kept.push({ ...b, keptWhy: 'day' });
+    else blocks.push(b);
+  }
+  return { blocks, kept, weekType, unknown: false, noClasses: false, configured: true };
 }
 
 /**
@@ -84,7 +90,7 @@ export function classPeriodsForDate(state, date) {
   const info = schoolBlocksForDate(state, date);
   if (info.noClasses || info.unknown) return [];
   const periods = school.grid[info.weekType][weekdayOf(date)] || [];
-  const free = new Set(info.blocks.map((b) => b.label.replace(/ block$/, '')));
+  const free = new Set([...info.blocks, ...info.kept].map((b) => b.label.replace(/ block$/, '')));
   const out = [];
   for (const p of [...periods].sort((a, b) => a.start.localeCompare(b.start))) {
     if (free.has(p.code)) continue;
@@ -94,6 +100,52 @@ export function classPeriodsForDate(state, date) {
     out.push({ letter, s, e });
   }
   return out.map((c) => ({ code: c.letter, start: c.s, end: c.e }));
+}
+
+/**
+ * When a class block starts on a date ('HH:MM'), joining a touching x block (Saturday BF: Bx 9:05 + B → 9:05).
+ * null when there's no school schedule, no classes that day, or the block doesn't meet.
+ */
+export function blockStartOn(state, date, letter) {
+  const sc = state.settings && state.settings.school;
+  const school = sc && SCHOOLS[sc.id];
+  if (!school || !letter || !isValidISODate(date)) return null;
+  const day = (state.days && state.days[date]) || {};
+  if (day.noClasses || school.calendar.noClassDates.includes(date)) return null;
+  const grid = school.grid[weekTypeFor(state, date)];
+  const periods = ((grid && grid[weekdayOf(date)]) || []).filter((p) => p.code[0] === letter)
+    .map((p) => ({ s: parseHM(p.start), e: parseHM(p.end), main: p.code === letter })).sort((a, b) => a.s - b.s);
+  const main = periods.find((p) => p.main);
+  if (!main) return null;
+  let start = main.s;
+  for (let i = periods.indexOf(main) - 1; i >= 0 && periods[i].e >= start; i--) start = periods[i].s;
+  return formatHM(start);
+}
+
+/** Classes that meet on a date, for "which block is it in?" pickers: [{ letter, start }] by start time. */
+export function classBlocksOn(state, date) {
+  const sc = state.settings && state.settings.school;
+  const school = sc && SCHOOLS[sc.id];
+  if (!school || !isValidISODate(date)) return [];
+  const day = (state.days && state.days[date]) || {};
+  if (day.noClasses || school.calendar.noClassDates.includes(date)) return [];
+  const grid = school.grid[weekTypeFor(state, date)];
+  const letters = [...new Set(((grid && grid[weekdayOf(date)]) || []).filter((p) => p.code.length === 1).map((p) => p.code))];
+  const free = new Set(sc.freeBlocks || []);
+  return letters.filter((L) => !free.has(L)).map((L) => ({ letter: L, start: blockStartOn(state, date, L) }))
+    .sort((a, b) => a.start.localeCompare(b.start));
+}
+
+/** Fill in the time of every deadline that's set to a class block (the timetable can change). Returns true if anything changed. */
+export function syncBlockDeadlines(state) {
+  let changed = false;
+  for (const t of state.tasks || []) {
+    const dl = t.deadline;
+    if (!dl || !dl.block) continue;
+    const time = blockStartOn(state, dl.date, dl.block);
+    if (dl.time !== time) { dl.time = time; changed = true; }
+  }
+  return changed;
 }
 
 /** Dated items, school free blocks and usual-week items for a date (minus usual-week items switched off that date). */

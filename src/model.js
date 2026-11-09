@@ -80,7 +80,9 @@ export function lastWorkDate(task, earliestStudyMin) {
 /** Human description of what a deadline means, used in review cards and task details. */
 export function deadlineMeaning(deadline, kind) {
   if (!deadline) return kind === 'test' ? 'No test date — it will only be planned in spare time.' : 'No deadline — it will only be planned in spare time.';
-  const what = kind === 'test' ? 'Prep is planned to finish' : 'Work is planned to finish';
+  const what = kind === 'test' ? 'Studying is planned to finish' : 'Work is planned to finish';
+  if (deadline.block && !deadline.time) return `${deadline.block} block doesn't meet that day, so it counts as due at the start of the day. ${what} the evening before.`;
+  if (deadline.block) return `In ${deadline.block} block (${formatTime12(parseHM(deadline.time))}): ${what.toLowerCase()} before class starts, so free time earlier that day counts too.`;
   if (!deadline.time) return `Date only: treated as due at the start of that day. ${what} the evening before.`;
   return `Exact time: ${what.toLowerCase()} before ${formatTime12(parseHM(deadline.time))} that day.`;
 }
