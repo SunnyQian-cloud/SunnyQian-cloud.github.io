@@ -124,8 +124,14 @@ main { max-width: 560px; margin: 0 auto; padding: 16px; outline: none; }
 .btn-icon { width: 44px; height: 44px; padding: 0; border-radius: 12px; color: var(--ink); }
 .btn-icon svg { fill: currentColor; stroke: currentColor; stroke-width: 2; }
 .btn-icon:hover { background: var(--surface-2); }
-.btn-add { background: none; color: var(--ink); font-weight: 500; padding: 8px 12px; }
-.btn-add:hover { background: var(--surface-2); }
+.btn-add { padding: 8px 14px; font-weight: 600; }
+.btn-schedule { display: none; padding: 8px 12px; font-weight: 500; }
+.head-edit { margin-left: auto; }
+.week-title-row { display: flex; align-items: baseline; gap: 10px; }
+@media (min-width: 720px) {
+  .btn-schedule { display: inline-flex; }
+  .head-edit { display: none; }
+}
 .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .chip-btn { min-height: 38px; padding: 4px 14px; border-radius: 999px; border: 1px solid var(--line-strong); background: transparent; color: var(--ink); font: 500 0.9rem var(--font); cursor: pointer; }
 .chip-btn:hover:not(:disabled) { border-color: var(--accent-line); color: var(--accent); }

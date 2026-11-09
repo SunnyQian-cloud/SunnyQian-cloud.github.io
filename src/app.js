@@ -263,7 +263,8 @@ function renderToday(week) {
     h('span', { class: 'subtle' }, D.formatDate(t, t)),
     school.configured && school.weekType ? weekChip(t, school.weekType) : null,
     school.noClasses ? h('span', { class: 'chip' }, 'No classes') : null,
-    day.noStudy ? h('span', { class: 'chip' }, 'Busy tonight') : null));
+    day.noStudy ? h('span', { class: 'chip' }, 'Busy tonight') : null,
+    button('Edit schedule', openSchedule, 'btn-link btn-small head-edit', { 'data-key': 'head-edit-today' })));
 
   const open = state.tasks.filter((x) => x.status === 'open');
   if (app.mode === 'real' && isStandalone() && !state.tasks.length && !state.prefs.bringOverDismissed) put(root, bringOverCard());
@@ -340,6 +341,7 @@ function markReviewed() {
   if (app.mode !== 'real' || app.state.prefs.reviewedNext || !app.state.tasks.length) return;
   app.state.prefs.reviewedNext = true;
   persist();
+  render(); // the Getting started list ticks off step 4 right away
 }
 
 function openHowTo() {
@@ -446,7 +448,7 @@ function draftLine(d) {
   const amb = d.flags.find((f) => (f.field === 'deadline' || f.field === 'deadlineTime') && (f.level === 'ambiguous' || f.level === 'warning') && !f.resolved);
   if (amb) notes.push(amb.message);
   else if (!d.deadlineDate) notes.push('No due date found. Tap it to add one, or save without.');
-  if (blockOff) notes.push(schoolSet ? `${d.deadlineBlock} block doesn't meet that day, so it counts as due when the day starts. Tap it to pick another.` : `Set up your classes (⋯ → My classes) so Blockwise knows when ${d.deadlineBlock} block is.`);
+  if (blockOff) notes.push(schoolSet ? `${d.deadlineBlock} block doesn't meet that day, so it counts as due when the day starts. Tap it to pick another.` : `Set up your classes (Edit schedule → Classes & free blocks) so Blockwise knows when ${d.deadlineBlock} block is.`);
   const lengthFlag = d.flags.find((f) => f.field === 'duration' && /how long the test lasts/.test(f.message));
   if (guessTime && lengthFlag) notes.push(`Read that as how long the test lasts, not study time. ${fmtDur(d.remainingMin)} of study is a guess — tap it to change.`);
   else if (guessTime) notes.push(test ? `${fmtDur(d.remainingMin)} of study is a guess — tap it to change.` : `${fmtDur(d.remainingMin)} is a guess — tap it to change.`);
@@ -537,7 +539,7 @@ function openBlockPicker(date, kind, current, onPick) {
     classes.length
       ? h('div', { class: 'quick-chips', role: 'group', 'aria-label': 'Class blocks' }, ...classes.map((c) =>
         button(`${c.letter} block · ${fmtT(D.parseHM(c.start))}`, () => { closeSheet(); onPick(c.letter); }, ['chip-btn', current === c.letter && 'is-on'].filter(Boolean).join(' '), { 'aria-pressed': String(current === c.letter) })))
-      : h('p', {}, schoolSet ? 'You have no classes that day.' : 'Set up your classes first: ⋯ → My classes.'),
+      : h('p', {}, schoolSet ? 'You have no classes that day.' : 'Set up your classes first: Edit schedule → Classes & free blocks.'),
     h('div', { class: 'actions' }, button('Not in a class', () => { closeSheet(); onPick(null); }, 'btn-ghost')),
   ]);
 }
@@ -806,7 +808,8 @@ function renderWeek(week) {
   const root = clear($('#view-week'));
   const t = today();
   put(root, h('div', { class: 'week-head' },
-    h('h1', { id: 'week-title', tabindex: '-1' }, 'This week'),
+    h('div', { class: 'week-title-row' }, h('h1', { id: 'week-title', tabindex: '-1' }, 'This week'),
+      button('Edit schedule', openSchedule, 'btn-link btn-small head-edit', { 'data-key': 'head-edit-week' })),
     h('p', { class: 'lead' }, 'Your free blocks and study hours, filled in for you.'),
     h('p', { class: 'hint' }, 'This updates by itself as you add things or tap Done and Not now. Tap a day for a day off or a busy evening, or a free block to keep it free.')));
   if (!week) { put(root, h('p', { class: 'alert alert-danger' }, 'Something went wrong making your plan. Your tasks are safe.')); return; }
@@ -998,7 +1001,7 @@ function openReminders() {
   const demo = app.mode === 'demo';
   openSheet('Reminders in your calendar', [
     h('p', {}, `This adds ${events.length} repeating event${events.length === 1 ? '' : 's'} to your phone's calendar — ${blocks.length ? `one for each free block and ` : ''}one for each evening's study hours — each with an alert 5 minutes before. They say “open Blockwise”, and Blockwise shows what to do.`),
-    !app.state.settings.school ? h('p', { class: 'callout' }, 'Tap your free blocks first (⋯ → My classes) to get block reminders too.') : null,
+    !app.state.settings.school ? h('p', { class: 'callout' }, 'Tap your free blocks first (Edit schedule → Classes & free blocks) to get block reminders too.') : null,
     h('ul', { class: 'small' },
       h('li', {}, 'iPhone: open the downloaded file and tap “Add All”.'),
       h('li', {}, 'Google Calendar: on a computer, open calendar.google.com → Settings → Import and choose the file. Some Android calendar apps can open it directly.'),
@@ -1017,9 +1020,30 @@ function openReminders() {
 
 // ---------- the ⋯ menu ----------
 function openMenu() {
-  const t = today();
   const st = app.state;
   const demo = app.mode === 'demo';
+  const row = (label, sub, onclick, key) => h('button', { type: 'button', class: 'menu-row', onclick, 'data-key': key }, h('span', { class: 'choice-title' }, label), sub ? h('span', { class: 'choice-sub' }, sub) : null);
+  const openCount = st.tasks.filter((x) => x.status === 'open').length;
+  openSheet('Menu', [
+    row('All tasks', openCount ? `${openCount} open · change, finish or delete` : 'Change, finish or delete', () => openAllTasks(), 'menu-all'),
+    h('h3', { class: 'small-heading' }, 'Help'),
+    row('How to use Blockwise', 'The four steps, and what the buttons do', openHowTo, 'menu-howto'),
+    row('How Blockwise decides', null, () => openSheet('How Blockwise decides', rulesExplainer()), 'menu-rules'),
+    demo ? row('Exit the example', 'Back to your own tasks', () => { closeSheet(); exitDemo(); }, 'menu-exit-demo')
+      : row('See an example day', 'Fictional — kept separate from your tasks', () => { closeSheet(); enterDemo(); }, 'demo-open'),
+    h('h3', { class: 'small-heading' }, 'More'),
+    row('Reminders', 'Phone alerts before free blocks and study hours', () => { closeSheet(); openReminders(); }, 'menu-reminders'),
+    row('Add to your Home Screen', null, openInstallHelp, 'menu-install'),
+    row('Feedback', 'Questions to answer and copy', () => openSheet('Feedback', feedbackForm()), 'menu-feedback'),
+    row('Backup and data', 'Export, restore or delete', openDataSheet, 'menu-data'),
+    demo ? null : h('div', { class: 'menu-danger' }, row('Start over…', 'Delete everything on this phone and set up again', startOver, 'menu-reset')),
+  ]);
+}
+
+/** Edit schedule: today-only changes first (with the date), then the usual week. Changes update the plan right away. */
+function openSchedule() {
+  const t = today();
+  const st = app.state;
   const school = schoolBlocksForDate(st, t);
   const day = st.days[t] || {};
   const row = (label, sub, onclick, key) => h('button', { type: 'button', class: 'menu-row', onclick, 'data-key': key }, h('span', { class: 'choice-title' }, label), sub ? h('span', { class: 'choice-sub' }, sub) : null);
@@ -1027,12 +1051,13 @@ function openMenu() {
     const id = uniqueId('sw');
     return h('label', { class: 'switch-row', for: id }, h('input', { type: 'checkbox', role: 'switch', id, checked, onchange }), h('span', {}, h('strong', {}, label), h('span', { class: 'muted small block' }, sub)));
   };
-  const openCount = st.tasks.filter((x) => x.status === 'open').length;
   const todayLetters = school.configured ? [...new Set([...school.blocks, ...school.kept.filter((b) => b.keptWhy === 'day')].map((b) => b.letter))].sort() : [];
   const skippedToday = new Set(day.skipBlocks || []);
-  openSheet('Menu', [
-    row('All tasks', openCount ? `${openCount} open · change, finish or delete` : 'Change, finish or delete', () => openAllTasks(), 'menu-all'),
-    h('h3', { class: 'small-heading' }, 'Today'),
+  const sc = st.settings.school;
+  openSheet('Edit schedule', [
+    h('p', { class: 'hint' }, 'Changes update your plan right away. Your tasks and progress stay as they are.'),
+    h('h3', { class: 'small-heading' }, `Today only — ${D.formatDate(t, t)}`),
+    h('p', { class: 'hint' }, 'These change today only. For another day, tap that day on Week.'),
     school.configured ? sw('No classes today', 'Day off or special schedule', school.noClasses, (e) => commit(() => { if (e.target.checked) dayRecord(t).noClasses = true; else delete dayRecord(t).noClasses; }, e.target.checked ? 'No classes today.' : 'Classes back on.')) : null,
     sw('Busy tonight', 'No study hours tonight (game, rehearsal, event)', !!day.noStudy, (e) => commit(() => { if (e.target.checked) dayRecord(t).noStudy = true; else delete dayRecord(t).noStudy; }, e.target.checked ? 'Tonight is off.' : 'Study hours back on tonight.')),
     todayLetters.length ? h('div', { class: 'field' }, h('span', { class: 'field-label', id: 'keep-today-label' }, 'Keep a free block free today'),
@@ -1049,23 +1074,13 @@ function openMenu() {
           }, on ? `${L} block kept free today.` : `${L} block is back in today's plan.`);
         } }, L)))) : null,
     h('div', { class: 'field' }, h('span', { class: 'field-label' }, 'Add free time today'),
-      h('div', { class: 'quick-chips' }, ...[['Morning', '09:00', '12:00'], ['Afternoon', '13:00', '17:00']].map(([l, s, e]) =>
-        button(`${l} ${fmtRange(D.parseHM(s), D.parseHM(e))}`, () => { closeSheet(); addFreeTime(t, l, s, e); }, 'chip-btn')),
+      h('div', { class: 'quick-chips' }, ...[['Morning', '09:00', '12:00'], ['Afternoon', '13:00', '17:00']].map(([l, s0, e0]) =>
+        button(`${l} ${fmtRange(D.parseHM(s0), D.parseHM(e0))}`, () => { closeSheet(); addFreeTime(t, l, s0, e0); }, 'chip-btn')),
         button('Other time…', () => openBlockEditor({ date: t, kind: 'free' }), 'chip-btn'))),
-    h('h3', { class: 'small-heading' }, 'Set up'),
-    row('My classes', st.settings.school ? `Free blocks ${st.settings.school.freeBlocks.join(', ') || 'none'}${(st.settings.school.keepFree || []).length ? ` (${st.settings.school.keepFree.join(', ')} kept free)` : ''} · ${weekTypeFor(st, t)} week` : 'Tap your free blocks', openSchoolSetup, 'menu-classes'),
+    h('h3', { class: 'small-heading' }, 'Usual schedule'),
+    row('Classes & free blocks', sc ? `Free blocks ${sc.freeBlocks.join(', ') || 'none'}${(sc.keepFree || []).length ? ` (${sc.keepFree.join(', ')} kept free)` : ''}` : 'Tap your free blocks', openSchoolSetup, 'menu-classes'),
+    sc && school.weekType ? row('Week rotation', `This is an ${school.weekType} week · switch if a break changed it`, () => { closeSheet(); switchWeek(t, school.weekType); }, 'menu-rotation') : null,
     row('Study hours', studyHoursSummary().join(' · '), openStudyHoursEditor, 'menu-study'),
-    row('Reminders', 'Phone alerts before free blocks and study hours', () => { closeSheet(); openReminders(); }, 'menu-reminders'),
-    row('Paste a list of tasks', 'Several at once, checked before saving', () => openCapture({ bulk: true }), 'menu-bulk'),
-    h('h3', { class: 'small-heading' }, 'More'),
-    demo ? row('Exit the example', 'Back to your own tasks', () => { closeSheet(); exitDemo(); }, 'menu-exit-demo')
-      : row('See an example day', 'Fictional — kept separate from your tasks', () => { closeSheet(); enterDemo(); }, 'demo-open'),
-    row('Backup and data', 'Export, restore or delete', openDataSheet, 'menu-data'),
-    row('How to use Blockwise', 'The four steps, and what the buttons do', openHowTo, 'menu-howto'),
-    row('Feedback', 'Questions to answer and copy', () => openSheet('Feedback', feedbackForm()), 'menu-feedback'),
-    row('How Blockwise decides', null, () => openSheet('How Blockwise decides', rulesExplainer()), 'menu-rules'),
-    row('Add to your Home Screen', null, openInstallHelp, 'menu-install'),
-    demo ? null : h('div', { class: 'menu-danger' }, row('Start over…', 'Delete everything on this phone and set up again', startOver, 'menu-reset')),
   ]);
 }
 
@@ -1228,7 +1243,7 @@ function openSchoolSetup() {
   const wtName = uniqueId('wt');
   const useStudyId = uniqueId('mxs');
   const err = h('p', { class: 'field-error', role: 'alert' });
-  openSheet('Your Middlesex classes', [
+  openSheet('Classes & free blocks', [
     h('form', { class: 'stack', novalidate: true, onsubmit: (e) => {
       e.preventDefault();
       const picked = e.target.querySelector(`input[name="${wtName}"]:checked`);
@@ -1891,6 +1906,7 @@ function init() {
   app.lastToday = today();
   app.planDate = today();
   $('#more-btn').addEventListener('click', openMenu);
+  $('#schedule-btn').addEventListener('click', openSchedule);
   $('#add-btn').addEventListener('click', openAdd);
   for (const b of document.querySelectorAll('.nav-btn')) b.addEventListener('click', () => go(b.dataset.view));
   $('#sheet .sheet-close').addEventListener('click', closeSheet);
