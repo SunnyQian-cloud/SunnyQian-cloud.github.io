@@ -416,3 +416,12 @@ dialog::backdrop { background: rgba(0, 0, 0, 0.65); }
 .add-hint { margin: 6px 2px 0; }
 .empty-hint { margin: 10px 2px 14px; color: var(--ink-2); text-align: center; }
 .example-link { margin: 10px 0 0; text-align: center; }
+
+/* ---------- setup, one question at a time ---------- */
+.setup-step { margin: 0; font-size: 0.8rem; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--accent); }
+.setup-title { margin: 2px 0 4px; font-size: 1.15rem; font-weight: 700; }
+.setup-title:focus { outline: none; }
+.setup-title:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+.setup-summary { margin: 0 0 6px; font-size: 0.9rem; color: var(--ink-2); }
+.setup .actions { margin-top: 12px; }
+.setup-foot { margin-top: 2px !important; }

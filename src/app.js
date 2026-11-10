@@ -318,7 +318,7 @@ function checklistSteps() {
   const skipped = !st.settings.school && !!st.prefs.setupNudgeDismissed;
   const set = !!st.settings.school || skipped;
   return [
-    { label: `Check which blocks meet this Saturday (${MIDDLESEX.weekTypes.map(saturdayLetters).join(' or ')}).`, done: set },
+    { label: `Choose your week (${MIDDLESEX.weekTypes.map(saturdayLetters).join(' or ')} on Saturday).`, done: set },
     { label: 'Mark your free blocks: tell Blockwise when you can work.', done: set },
     { label: 'Add something due and how long it will take.', done: st.tasks.length > 0 },
     { label: 'Review your next step: change anything that doesn\'t fit.', done: !!st.prefs.reviewedNext },
@@ -373,45 +373,67 @@ function openHowTo() {
   ]);
 }
 
+/**
+ * First-run setup, one question at a time: Step 1 the week (answered with Saturday's blocks), Step 2 free blocks.
+ * Progress lives in app.setupDraft (memory only), so the 30-second refresh never wipes a half-finished setup.
+ */
 function setupCard() {
-  const free = new Set(), keep = new Set();
-  let wk = null;
-  const err = h('p', { class: 'field-error', role: 'alert' });
-  const letters = h('div', { class: 'block-grid', role: 'group', 'aria-label': 'Free blocks' });
-  const keepBox = h('div', { class: 'block-grid', role: 'group', 'aria-label': 'Free blocks to keep free' });
-  const keepWrap = h('div', { hidden: true },
-    h('p', { class: 'setup-q' }, 'Keep any of them free for yourself?', h('span', { class: 'hint block' }, 'Optional. Blockwise won\'t plan work in these.')), keepBox);
-  const weeks = h('div', { class: 'block-grid', role: 'group', 'aria-label': 'This week' });
-  const draw = () => {
-    clear(letters); clear(weeks); clear(keepBox);
-    for (const L of MIDDLESEX.blocks) letters.append(h('button', { type: 'button', class: 'block-chip', 'aria-pressed': String(free.has(L)), onclick: () => { if (free.has(L)) { free.delete(L); keep.delete(L); } else free.add(L); draw(); } }, L));
-    for (const L of [...free].sort()) keepBox.append(h('button', { type: 'button', class: 'block-chip', 'aria-pressed': String(keep.has(L)), 'aria-label': `Keep ${L} block free`, onclick: () => { keep.has(L) ? keep.delete(L) : keep.add(L); draw(); } }, L));
-    keepWrap.hidden = !free.size;
-    for (const w of MIDDLESEX.weekTypes) {
-      weeks.append(h('button', { type: 'button', class: 'block-chip wide week-choice', 'aria-pressed': String(wk === w), onclick: () => { wk = w; err.textContent = ''; draw(); } },
-        h('span', { class: 'wk-letters' }, saturdayLetters(w)), h('span', { class: 'wk-name' }, `${w} week`)));
-    }
+  const d = (app.setupDraft ||= { step: 1, wk: null, free: [], keep: [] });
+  const free = new Set(d.free), keep = new Set(d.keep);
+  const update = (focusKey) => {
+    d.free = [...free].sort();
+    d.keep = [...keep].filter((L) => free.has(L)).sort();
+    render();
+    if (focusKey) document.querySelector(`[data-key="${focusKey}"]`)?.focus();
   };
-  draw();
+  const go2 = (step) => { d.step = step; update('setup-title'); };
+  const notHere = button('Not at Middlesex', () => { app.setupDraft = null; commit((s) => { s.prefs.setupNudgeDismissed = true; }); }, 'btn-link btn-small');
+  if (d.step === 1 || !d.wk) {
+    return h('section', { class: 'setup', 'aria-label': 'Set up your classes' },
+      h('p', { class: 'setup-step' }, 'Step 1 of 2'),
+      h('h2', { class: 'setup-title', tabindex: '-1', 'data-key': 'setup-title' }, 'Choose your week'),
+      h('p', { class: 'hint' }, 'Look at Saturday in your school planner. Which blocks meet?'),
+      h('div', { class: 'block-grid', role: 'group', 'aria-label': 'Saturday blocks this week' },
+        ...MIDDLESEX.weekTypes.map((w) => h('button', {
+          type: 'button', class: 'block-chip wide week-choice', 'aria-pressed': String(d.wk === w), 'data-key': `setup-wk-${w}`,
+          onclick: () => { d.wk = w; go2(2); },
+        }, h('span', { class: 'wk-letters' }, saturdayLetters(w)), h('span', { class: 'wk-name' }, `${w} week`)))),
+      h('p', { class: 'hint' }, 'Not sure? You can change it later with the week button on Today.'),
+      h('div', { class: 'actions' }, notHere));
+  }
+  const letters = h('div', { class: 'block-grid', role: 'group', 'aria-label': 'Free blocks' },
+    ...MIDDLESEX.blocks.map((L) => h('button', {
+      type: 'button', class: 'block-chip', 'aria-pressed': String(free.has(L)), 'data-key': `setup-free-${L}`,
+      onclick: () => { if (free.has(L)) { free.delete(L); keep.delete(L); } else free.add(L); update(`setup-free-${L}`); },
+    }, L)));
+  const keepRow = free.size ? h('div', {},
+    h('p', { class: 'setup-q' }, 'Keep any of them free for yourself?', h('span', { class: 'hint block' }, 'Optional. Blockwise won\'t plan work in these.')),
+    h('div', { class: 'block-grid', role: 'group', 'aria-label': 'Free blocks to keep free' },
+      ...[...free].sort().map((L) => h('button', {
+        type: 'button', class: 'block-chip', 'aria-pressed': String(keep.has(L)), 'aria-label': `Keep ${L} block free`, 'data-key': `setup-keep-${L}`,
+        onclick: () => { keep.has(L) ? keep.delete(L) : keep.add(L); update(`setup-keep-${L}`); },
+      }, L)))) : null;
   return h('section', { class: 'setup', 'aria-label': 'Set up your classes' },
-    h('p', { class: 'callout-title' }, 'Getting started'),
-    checklistList(checklistSteps()),
-    h('p', { class: 'setup-q' }, '1. Which blocks meet this Saturday?', h('span', { class: 'hint block' }, 'Look at Saturday in your planner.')), weeks,
-    h('p', { class: 'hint' }, 'No classes this Saturday, or not sure? Pick one — you can switch it any time with the week button on Today.'),
-    h('p', { class: 'setup-q' }, '2. Which blocks are free for you?', h('span', { class: 'hint block' }, 'Blocks with no class. Blockwise plans work in these.')), letters,
-    keepWrap,
-    err,
+    h('p', { class: 'setup-step' }, 'Step 2 of 2'),
+    h('h2', { class: 'setup-title', tabindex: '-1', 'data-key': 'setup-title' }, 'Which blocks are free for you?'),
+    h('p', { class: 'setup-summary' }, `Week: ${saturdayLetters(d.wk)} on Saturday (${d.wk} week) `,
+      button('Change', () => go2(1), 'btn-link btn-small', { 'aria-label': 'Change the week' })),
+    h('p', { class: 'hint' }, 'Select every block where you have no class.'),
+    letters,
+    keepRow,
     h('div', { class: 'actions' },
-      button('Save', () => {
-        if (!wk) { err.textContent = 'Pick the blocks that meet this Saturday.'; return; }
+      button('Back', () => go2(1), 'btn-ghost'),
+      button('Save schedule', () => {
+        const wk = d.wk;
+        app.setupDraft = null;
         commit((s) => {
           s.settings.school = { id: 'middlesex', freeBlocks: [...free].sort(), freeExt: [], anchor: { monday: mondayOf(today()), type: wk } };
           if (keep.size) s.settings.school.keepFree = [...keep].filter((L) => free.has(L)).sort();
           ensureWeek(s).study = JSON.parse(JSON.stringify(MIDDLESEX.study));
           s.prefs.setupNudgeDismissed = true;
         }, 'Saved. Your free blocks and study hours are in.');
-      }, 'btn-primary', { 'data-key': 'setup-save' }),
-      button('Not at Middlesex', () => commit((s) => { s.prefs.setupNudgeDismissed = true; }), 'btn-ghost')));
+      }, 'btn-primary', { 'data-key': 'setup-save' })),
+    h('div', { class: 'actions setup-foot' }, notHere));
 }
 
 // ---------- add: type → one tappable line → Save ----------
@@ -1841,7 +1863,7 @@ function wipeEverything(message) {
   } catch { /* storage unavailable: nothing persisted anyway */ }
   app.state = emptyState();
   app.mode = 'real';
-  app.addDraft = null; app.addOpen = false;
+  app.addDraft = null; app.addOpen = false; app.setupDraft = null;
   app.banners.unreadable = null; app.banners.saveError = null; app.blockSaves = false;
   closeSheet();
   app.planDate = today();
