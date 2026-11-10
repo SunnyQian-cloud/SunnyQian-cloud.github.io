@@ -1,6 +1,6 @@
 // Local persistence, validation, export and import. No network, no accounts.
 import { DEFAULT_SETTINGS, KINDS, PRIORITIES, BLOCK_CATEGORIES } from './model.js';
-import { isValidISODate, parseHM } from './dates.js';
+import { isValidISODate, parseHM, weekdayOf } from './dates.js';
 
 export const SCHEMA_VERSION = 1;
 export const STORAGE_KEY = 'blockwise.v1';
@@ -149,10 +149,11 @@ export function validateState(raw) {
         if (!isObj(sc) || sc.id !== 'middlesex' || !Array.isArray(sc.freeBlocks) || !sc.freeBlocks.every((b) => letters.includes(b)) ||
             (sc.freeExt != null && (!Array.isArray(sc.freeExt) || !sc.freeExt.every((b) => letters.map((l) => `${l}x`).includes(b)))) ||
             (sc.keepFree != null && (!Array.isArray(sc.keepFree) || !sc.keepFree.every((b) => letters.includes(b)))) ||
-            !isObj(sc.anchor) || !isValidISODate(sc.anchor.monday) || !['ECF', 'ADB'].includes(anchorType)) {
+            (sc.anchor !== null && (!isObj(sc.anchor) || !isValidISODate(sc.anchor.monday) || !['ECF', 'ADB'].includes(anchorType)))) {
           errors.push('School schedule settings are invalid.');
         } else {
-          settings.school = { id: sc.id, freeBlocks: [...new Set(sc.freeBlocks)].sort(), freeExt: [...new Set(sc.freeExt || [])].sort(), anchor: { monday: sc.anchor.monday, type: anchorType } };
+          // anchor null = "No Saturday classes" (Saturdays only have classes when set for that Saturday)
+          settings.school = { id: sc.id, freeBlocks: [...new Set(sc.freeBlocks)].sort(), freeExt: [...new Set(sc.freeExt || [])].sort(), anchor: sc.anchor === null ? null : { monday: sc.anchor.monday, type: anchorType } };
           const keep = [...new Set(sc.keepFree || [])].filter((b) => sc.freeBlocks.includes(b)).sort();
           if (keep.length) settings.school.keepFree = keep;
         }
@@ -191,6 +192,7 @@ export function validateState(raw) {
       }
       if (d.noStudy != null) { if (typeof d.noStudy === 'boolean') { if (d.noStudy) out.noStudy = true; } else errors.push(`Busy-tonight flag for ${date} is invalid.`); }
       if (d.noClasses != null) { if (typeof d.noClasses === 'boolean') { if (d.noClasses) out.noClasses = true; } else errors.push(`No-class flag for ${date} is invalid.`); }
+      if (d.satType != null) { if (['ECF', 'ADB'].includes(d.satType) && weekdayOf(date) === 6) out.satType = d.satType; else errors.push(`Saturday classes for ${date} are invalid.`); }
       if (d.skipBlocks != null) {
         if (Array.isArray(d.skipBlocks) && d.skipBlocks.every((b) => BLOCK_LETTERS.includes(b))) { if (d.skipBlocks.length) out.skipBlocks = [...new Set(d.skipBlocks)].sort(); }
         else errors.push(`Kept-free blocks for ${date} are invalid.`);

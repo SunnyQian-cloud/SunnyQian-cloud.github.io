@@ -37,7 +37,7 @@ export function reminderEvents(state, today) {
   const events = [];
   const sc = state.settings && state.settings.school;
   const school = sc && SCHOOLS[sc.id];
-  if (school && sc.anchor) {
+  if (school) {
     const free = new Set([...sc.freeBlocks, ...sc.freeBlocks.map((b) => `${b}x`), ...(sc.freeExt || [])]);
     for (const type of school.weekTypes) {
       for (let wd = 0; wd < 7; wd++) {
@@ -46,6 +46,7 @@ export function reminderEvents(state, today) {
         // Days identical in both week types get one weekly event (made from the first week type only).
         const sameBoth = JSON.stringify(school.grid[school.weekTypes[0]][wd]) === JSON.stringify(school.grid[school.weekTypes[1]][wd]);
         if (sameBoth && type !== school.weekTypes[0]) continue;
+        if (!sameBoth && !sc.anchor) continue; // "No Saturday classes": no repeating Saturday alerts
         for (const m of mergePeriods(periods)) {
           const label = m.codes.filter((c) => !c.endsWith('x')).join(' + ') || m.codes.join(' + ');
           const start = sameBoth ? firstDate(state, today, wd) : firstDate(state, today, wd, type);

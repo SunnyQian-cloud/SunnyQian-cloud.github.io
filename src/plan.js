@@ -36,18 +36,43 @@ export function mondayOf(date) {
   return addDays(date, -((weekdayOf(date) + 6) % 7));
 }
 
-/** Which school week type (e.g. 'ECF' / 'ADB') a date falls in, alternating from the student's anchor week. */
+/**
+ * Which school week type (e.g. 'ECF' / 'ADB') a date falls in: the student's choice for that week's Saturday if
+ * they set one, else alternating from their anchor week. No anchor = "No Saturday classes": only Saturdays the
+ * student set by hand have a week type (weekdays don't need one — they're the same in every week type).
+ */
 export function weekTypeFor(state, date) {
   const sc = state.settings && state.settings.school;
   const school = sc && SCHOOLS[sc.id];
-  if (!school || !sc.anchor) return null;
+  if (!school) return null;
   const monday = mondayOf(date);
+  const sat = addDays(monday, 5);
+  const setByHand = state.days && state.days[sat] && state.days[sat].satType;
+  if (setByHand && school.weekTypes.includes(setByHand)) return setByHand;
   const fromCalendar = school.calendar.weekTypes[monday];
   if (fromCalendar) return fromCalendar;
+  if (!sc.anchor) return null;
   const weeks = Math.round(daysBetween(sc.anchor.monday, monday) / 7);
   const [a, b] = school.weekTypes;
   const other = sc.anchor.type === a ? b : a;
   return ((weeks % 2) + 2) % 2 === 0 ? sc.anchor.type : other;
+}
+
+/**
+ * A weekday's periods for a week type. Without a week type, only weekdays that are the same in every week type
+ * are known (Monday–Friday at Middlesex); otherwise null.
+ */
+export function periodsFor(school, weekType, wd) {
+  if (weekType && school.grid[weekType]) return school.grid[weekType][wd] || [];
+  const versions = school.weekTypes.map((wt) => (school.grid[wt] && school.grid[wt][wd]) || []);
+  return versions.every((v) => JSON.stringify(v) === JSON.stringify(versions[0])) ? versions[0] : null;
+}
+
+/** The timetable to read class times from: the student's school, or before setup the Middlesex one (unless they said they're not at Middlesex). */
+function timetableSchool(state) {
+  const sc = state.settings && state.settings.school;
+  if (sc) return SCHOOLS[sc.id] || null;
+  return state.prefs && state.prefs.setupNudgeDismissed ? null : SCHOOLS.middlesex;
 }
 
 /**
@@ -62,8 +87,9 @@ export function schoolBlocksForDate(state, date) {
   const weekType = weekTypeFor(state, date);
   const noClasses = !!day.noClasses || school.calendar.noClassDates.includes(date);
   if (noClasses) return { blocks: [], kept: [], weekType, unknown: false, noClasses: true, configured: true };
-  const periods = school.grid[weekType] ? school.grid[weekType][weekdayOf(date)] : null;
-  if (periods == null) return { blocks: [], kept: [], weekType, unknown: true, noClasses: false, configured: true };
+  const periods = periodsFor(school, weekType, weekdayOf(date));
+  // A Saturday with no week type: the student chose "No Saturday classes" and hasn't set this Saturday.
+  if (periods == null) return { blocks: [], kept: [], weekType: null, unknown: false, noClasses: true, satOff: true, configured: true };
   const free = new Set([...sc.freeBlocks, ...sc.freeBlocks.map((b) => `${b}x`), ...(sc.freeExt || [])]);
   const always = new Set(sc.keepFree || []);
   const skipDay = new Set(Array.isArray(day.skipBlocks) ? day.skipBlocks : []);
@@ -89,7 +115,7 @@ export function classPeriodsForDate(state, date) {
   if (!school) return [];
   const info = schoolBlocksForDate(state, date);
   if (info.noClasses || info.unknown) return [];
-  const periods = school.grid[info.weekType][weekdayOf(date)] || [];
+  const periods = periodsFor(school, info.weekType, weekdayOf(date)) || [];
   const free = new Set([...info.blocks, ...info.kept].map((b) => b.label.replace(/ block$/, '')));
   const out = [];
   for (const p of [...periods].sort((a, b) => a.start.localeCompare(b.start))) {
@@ -104,16 +130,15 @@ export function classPeriodsForDate(state, date) {
 
 /**
  * When a class block starts on a date ('HH:MM'), joining a touching x block before it, if any.
- * null when there's no school schedule, no classes that day, or the block doesn't meet.
+ * Before setup, weekday times come from the Middlesex timetable (the same in both week types).
+ * null when there's no timetable, no classes that day, the day depends on an unknown week type, or the block doesn't meet.
  */
 export function blockStartOn(state, date, letter) {
-  const sc = state.settings && state.settings.school;
-  const school = sc && SCHOOLS[sc.id];
+  const school = timetableSchool(state);
   if (!school || !letter || !isValidISODate(date)) return null;
   const day = (state.days && state.days[date]) || {};
   if (day.noClasses || school.calendar.noClassDates.includes(date)) return null;
-  const grid = school.grid[weekTypeFor(state, date)];
-  const periods = ((grid && grid[weekdayOf(date)]) || []).filter((p) => p.code[0] === letter)
+  const periods = (periodsFor(school, weekTypeFor(state, date), weekdayOf(date)) || []).filter((p) => p.code[0] === letter)
     .map((p) => ({ s: parseHM(p.start), e: parseHM(p.end), main: p.code === letter })).sort((a, b) => a.s - b.s);
   const main = periods.find((p) => p.main);
   if (!main) return null;
@@ -125,13 +150,12 @@ export function blockStartOn(state, date, letter) {
 /** Classes that meet on a date, for "which block is it in?" pickers: [{ letter, start }] by start time. */
 export function classBlocksOn(state, date) {
   const sc = state.settings && state.settings.school;
-  const school = sc && SCHOOLS[sc.id];
+  const school = timetableSchool(state);
   if (!school || !isValidISODate(date)) return [];
   const day = (state.days && state.days[date]) || {};
   if (day.noClasses || school.calendar.noClassDates.includes(date)) return [];
-  const grid = school.grid[weekTypeFor(state, date)];
-  const letters = [...new Set(((grid && grid[weekdayOf(date)]) || []).filter((p) => p.code.length === 1).map((p) => p.code))];
-  const free = new Set(sc.freeBlocks || []);
+  const letters = [...new Set((periodsFor(school, weekTypeFor(state, date), weekdayOf(date)) || []).filter((p) => p.code.length === 1).map((p) => p.code))];
+  const free = new Set((sc && sc.freeBlocks) || []); // before setup every block that meets is offered
   return letters.filter((L) => !free.has(L)).map((L) => ({ letter: L, start: blockStartOn(state, date, L) }))
     .sort((a, b) => a.start.localeCompare(b.start));
 }

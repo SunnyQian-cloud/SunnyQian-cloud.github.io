@@ -266,7 +266,7 @@ function renderToday(week) {
   put(root, h('div', { class: 'home-head' },
     h('h1', { id: 'today-title', tabindex: '-1' }, 'Today'),
     h('span', { class: 'subtle' }, D.formatDate(t, t)),
-    school.configured && school.weekType ? weekChip(t, school.weekType) : null,
+    school.configured ? weekChip(t, school.weekType) : null,
     school.noClasses ? h('span', { class: 'chip' }, 'No classes') : null,
     day.noStudy ? h('span', { class: 'chip' }, 'Busy tonight') : null,
     button('Edit schedule', openSchedule, 'btn-link btn-small head-edit', { 'data-key': 'head-edit-today' })));
@@ -335,22 +335,42 @@ function introDemo() {
 
 /** “ECF week ⇄” — one tap to switch the alternation if a break threw it off. */
 function weekChip(date, weekType) {
-  return button(h('span', {}, `${weekType} week `, h('span', { 'aria-hidden': 'true' }, '⇄')), () => switchWeek(date, weekType), 'chip-btn', { 'aria-label': `${weekType} week. Switch week type`, 'data-key': 'week-chip' });
+  const label = weekType ? `${weekType} week` : 'No Sat. classes';
+  return button(h('span', {}, `${label} `, h('span', { 'aria-hidden': 'true' }, '⇄')), () => openWeekSheet(date), 'chip-btn', { 'aria-label': `${label}. Change`, 'data-key': 'week-chip' });
 }
 
-async function switchWeek(date, current) {
-  const other = MIDDLESEX.weekTypes.find((w) => w !== current);
-  const ok = await confirmDialog({
-    title: `Switch to ${other} week?`,
-    body: [h('p', {}, `This week becomes an ${other} week, and later weeks keep alternating from here. Use this if a break or long weekend threw the pattern off.`)],
-    okLabel: `Switch to ${other}`,
-  });
-  if (!ok) return;
-  commit((s) => { s.settings.school.anchor = { monday: mondayOf(date), type: other }; }, `Switched to ${other} week. Your week is updated.`);
+/** The three answers to "which blocks meet on Saturday?": E, C, F · ECF week / A, D, B · ADB week / No classes · Free Saturday. */
+function weekChoiceButtons(current, onPick, keyPrefix) {
+  const choice = (value, big, small) => h('button', {
+    type: 'button', class: 'block-chip wide week-choice', 'aria-pressed': String(current === value), 'data-key': `${keyPrefix}-${value}`,
+    onclick: () => onPick(value),
+  }, h('span', { class: 'wk-letters' }, big), h('span', { class: 'wk-name' }, small));
+  return [...MIDDLESEX.weekTypes.map((w) => choice(w, saturdayLetters(w), `${w} week`)), choice('NONE', 'No classes', 'Free Saturday')];
+}
+
+/** The week button on Today: this week's Saturday blocks, or no Saturday classes. Later weeks alternate from an E, C, F / A, D, B answer. */
+function openWeekSheet(date) {
+  const sc = app.state.settings.school;
+  const sat = D.addDays(mondayOf(date), 5);
+  const current = sc.anchor || (app.state.days[sat] && app.state.days[sat].satType) ? weekTypeFor(app.state, date) : 'NONE';
+  const choose = (wk) => {
+    closeSheet();
+    commit((s) => {
+      s.settings.school.anchor = wk === 'NONE' ? null : { monday: mondayOf(date), type: wk };
+      if (s.days[sat]) { delete s.days[sat].satType; if (wk !== 'NONE') delete s.days[sat].noClasses; }
+    }, wk === 'NONE' ? 'No Saturday classes. If a Saturday has classes, tap it on Week.' : `${wk} week. Later weeks alternate from here.`);
+  };
+  openSheet('Saturday classes', [
+    h('p', { class: 'hint' }, `Look at Saturday, ${thisSatShort(date)} in your planner. Which blocks meet?`),
+    h('div', { class: 'block-grid', role: 'group', 'aria-label': 'Saturday blocks this week' }, ...weekChoiceButtons(current, choose, 'wk')),
+    h('p', { class: 'hint' }, 'E, C, F or A, D, B: later weeks alternate from your answer (use this after a break). No classes: Saturdays stay free unless you set one on Week.'),
+  ]);
 }
 
 // ---------- first-run setup (inline, two taps) ----------
 /** "E, C, F" — the class blocks that meet on Saturday in a week type. */
+/** "Nov 14": this week's Saturday (weeks run Monday–Sunday). */
+function thisSatShort(date = today()) { return D.formatDate(D.addDays(mondayOf(date), 5), date).replace(/^\w+, /, ''); }
 function saturdayLetters(weekType) {
   const sat = (MIDDLESEX.grid[weekType] && MIDDLESEX.grid[weekType][6]) || [];
   return [...new Set(sat.map((p) => p.code[0]))].join(', ');
@@ -436,12 +456,9 @@ function setupCard() {
     return h('section', { class: 'setup', 'aria-label': 'Set up your classes' },
       h('p', { class: 'setup-step' }, 'Step 1 of 2'),
       h('h2', { class: 'setup-title', tabindex: '-1', 'data-key': 'setup-title' }, 'Choose your week'),
-      h('p', { class: 'hint' }, 'Look at Saturday in your school planner. Which blocks meet?'),
+      h('p', { class: 'hint' }, `Look at Saturday, ${thisSatShort()} in your school planner. Which blocks meet?`),
       h('div', { class: 'block-grid', role: 'group', 'aria-label': 'Saturday blocks this week' },
-        ...MIDDLESEX.weekTypes.map((w) => h('button', {
-          type: 'button', class: 'block-chip wide week-choice', 'aria-pressed': String(d.wk === w), 'data-key': `setup-wk-${w}`,
-          onclick: () => { d.wk = w; go2(2); },
-        }, h('span', { class: 'wk-letters' }, saturdayLetters(w)), h('span', { class: 'wk-name' }, `${w} week`)))),
+        ...weekChoiceButtons(d.wk, (w) => { d.wk = w; go2(2); }, 'setup-wk')),
       h('p', { class: 'hint' }, 'Not sure? You can change it later with the week button on Today.'),
       h('div', { class: 'actions' }, notHere));
   }
@@ -460,8 +477,9 @@ function setupCard() {
   return h('section', { class: 'setup', 'aria-label': 'Set up your classes' },
     h('p', { class: 'setup-step' }, 'Step 2 of 2'),
     h('h2', { class: 'setup-title', tabindex: '-1', 'data-key': 'setup-title' }, 'Which blocks are free for you?'),
-    h('p', { class: 'setup-summary' }, `Week: ${saturdayLetters(d.wk)} on Saturday (${d.wk} week) `,
+    h('p', { class: 'setup-summary' }, d.wk === 'NONE' ? `Saturday, ${thisSatShort()}: no classes ` : `Week: ${saturdayLetters(d.wk)} on Saturday (${d.wk} week) `,
       button('Change', () => go2(1), 'btn-link btn-small', { 'aria-label': 'Change the week' })),
+    d.wk === 'NONE' ? h('p', { class: 'hint' }, 'Saturdays stay class-free. If a later Saturday has classes, tap it on Week.') : null,
     h('p', { class: 'hint' }, 'Select every block where you have no class.'),
     letters,
     keepRow,
@@ -471,7 +489,8 @@ function setupCard() {
         const wk = d.wk;
         app.setupDraft = null;
         commit((s) => {
-          s.settings.school = { id: 'middlesex', freeBlocks: [...free].sort(), freeExt: [], anchor: { monday: mondayOf(today()), type: wk } };
+          // "No classes" → no week type: Saturdays stay free unless the student sets one (Week → tap Saturday)
+          s.settings.school = { id: 'middlesex', freeBlocks: [...free].sort(), freeExt: [], anchor: wk === 'NONE' ? null : { monday: mondayOf(today()), type: wk } };
           if (keep.size) s.settings.school.keepFree = [...keep].filter((L) => free.has(L)).sort();
           ensureWeek(s).study = JSON.parse(JSON.stringify(MIDDLESEX.study));
           s.prefs.setupNudgeDismissed = true;
@@ -526,6 +545,7 @@ function draftLine(d) {
   const guessTime = d.durationSource === 'suggested' && Number(d.remainingMin) === d.suggestedMin;
   const test = d.kind === 'test';
   const schoolSet = !!app.state.settings.school;
+  const blocksKnown = schoolSet || !app.state.prefs.setupNudgeDismissed; // before setup, weekday class times are already known
   const blockStart = d.deadlineBlock && d.deadlineDate ? blockStartOn(app.state, d.deadlineDate, d.deadlineBlock) : null;
   const blockOff = !!(d.deadlineBlock && d.deadlineDate && !blockStart);
   const mins = fmtDur(Number(d.remainingMin) || 0);
@@ -534,7 +554,7 @@ function draftLine(d) {
   const amb = d.flags.find((f) => (f.field === 'deadline' || f.field === 'deadlineTime') && (f.level === 'ambiguous' || f.level === 'warning') && !f.resolved);
   if (amb) notes.push(amb.message);
   else if (!d.deadlineDate) notes.push('No due date found. Tap it to add one, or save without.');
-  if (blockOff) notes.push(schoolSet ? `${d.deadlineBlock} block doesn't meet that day, so it counts as due when the day starts. Tap it to pick another.` : `Set up your classes (Edit schedule → Classes & free blocks) so Blockwise knows when ${d.deadlineBlock} block is.`);
+  if (blockOff) notes.push(schoolSet || D.weekdayOf(d.deadlineDate) !== 6 ? `${d.deadlineBlock} block doesn't meet that day, so it counts as due when the day starts. Tap it to pick another.` : `Saturday's blocks depend on the week. Choose your week (step 1) so Blockwise knows when ${d.deadlineBlock} block is.`);
   const lengthFlag = d.flags.find((f) => f.field === 'duration' && /how long the test lasts/.test(f.message));
   if (guessTime && lengthFlag) notes.push(`Read that as how long the test lasts, not study time. ${fmtDur(d.remainingMin)} of study is a guess — tap it to change.`);
   else if (guessTime) notes.push(test ? `${fmtDur(d.remainingMin)} of study is a guess — tap it to change.` : `${fmtDur(d.remainingMin)} is a guess — tap it to change.`);
@@ -549,18 +569,30 @@ function draftLine(d) {
     render();
     document.querySelector('[data-key="draft-save"]')?.focus({ preventScroll: true });
   };
-  const askClasses = d.deadlineDate && schoolSet && !d.deadlineBlock && !d.deadlineTime && d.blockAnsweredFor !== d.deadlineDate
-    ? classBlocksOn(app.state, d.deadlineDate) : [];
+  // Always asked once there's a date and no block or time yet; it goes away when answered for that date.
+  const askOpen = !!(d.deadlineDate && !d.deadlineBlock && !d.deadlineTime && d.blockAnsweredFor !== d.deadlineDate);
+  const askClasses = askOpen && blocksKnown ? classBlocksOn(app.state, d.deadlineDate) : [];
+  let askWhy = null; // why there are no block buttons for that date
+  if (askOpen && !askClasses.length && blocksKnown) {
+    const sat = D.weekdayOf(d.deadlineDate) === 6;
+    askWhy = sat && !schoolSet ? 'Saturday\'s blocks depend on the week: choose your week above to see them.'
+      : sat && schoolBlocksForDate(app.state, d.deadlineDate).satOff ? 'No Saturday classes are set for that day. If there are, tap that Saturday on Week.'
+      : 'No classes meet that day.';
+  }
   const askId = uniqueId('ask');
-  const askDate = d.deadlineDate ? `${D.formatDate(d.deadlineDate, t)}${D.weekdayOf(d.deadlineDate) === 6 ? ` · ${weekTypeFor(app.state, d.deadlineDate)} week` : ''}` : '';
-  const blockQuestion = askClasses.length ? h('div', { class: 'draft-ask', role: 'group', 'aria-labelledby': askId },
-    h('p', { class: 'draft-ask-q', id: askId }, test ? 'Which block is the test in?' : 'Due in a class? Which block?', ' ', h('span', { class: 'draft-ask-date' }, askDate)),
+  const askWt = d.deadlineDate && D.weekdayOf(d.deadlineDate) === 6 ? weekTypeFor(app.state, d.deadlineDate) : null;
+  const askDate = d.deadlineDate ? `${D.formatDate(d.deadlineDate, t)}${askWt ? ` · ${askWt} week` : ''}` : '';
+  const blockQuestion = askOpen ? h('div', { class: 'draft-ask', role: 'group', 'aria-labelledby': askId },
+    h('p', { class: 'draft-ask-q', id: askId },
+      askClasses.length ? (test ? 'Which block is the test in?' : 'Due in a class? Which block?') : (test ? 'When is the test?' : 'When is it due?'),
+      ' ', h('span', { class: 'draft-ask-date' }, askDate)),
+    askWhy ? h('p', { class: 'hint draft-ask-why' }, askWhy) : null,
     h('div', { class: 'quick-chips' },
       ...askClasses.map((c) => button(`${c.letter} · ${fmtT(D.parseHM(c.start))}`, () => pickBlock(c.letter), 'chip-btn', { 'data-key': `ask-${c.letter}` })),
-      button('Other time…', () => askDraftTime(d), 'chip-btn', { 'data-key': 'ask-time' }),
+      button(askClasses.length ? 'Other time…' : 'Add a time…', () => askDraftTime(d), 'chip-btn', { 'data-key': 'ask-time' }),
       button('Skip', () => pickBlock(null), 'chip-btn', { 'data-key': 'ask-skip' }))) : null;
   // No block and no time: say what that means (due when the day starts, so the work happens the day before).
-  if (d.deadlineDate && d.deadlineDate > t && !d.deadlineBlock && !d.deadlineTime && !askClasses.length && !amb) {
+  if (d.deadlineDate && d.deadlineDate > t && !d.deadlineBlock && !d.deadlineTime && !askOpen && !amb) {
     notes.push(`No block or time, so it counts as due at the start of ${D.formatDate(d.deadlineDate, t)}: ${test ? 'study' : 'work'} is planned to finish the day before.`);
   }
   return h('section', { class: 'draft', 'aria-label': 'Check before saving' },
@@ -568,7 +600,7 @@ function draftLine(d) {
       chip(d.title || 'Add a title', () => editDraftTitle(d), { aria: `Title: ${d.title || 'missing'}. Change`, warn: !d.title }),
       chip(KIND_LABELS[d.kind], () => { d.kind = d.kind === 'assignment' ? 'project' : d.kind === 'project' ? 'test' : 'assignment'; if (guessTime) { d.suggestedMin = SUGGESTED_MINUTES[d.kind]; d.remainingMin = d.suggestedMin; } render(); }, { aria: `Type: ${KIND_LABELS[d.kind]}. Tap to change` }),
       chip(due, () => editDraftDue(d), { aria: `${due}. Change`, warn: !d.deadlineDate || !!amb }),
-      d.deadlineDate && (schoolSet || d.deadlineBlock) && !blockQuestion
+      d.deadlineDate && (blocksKnown || d.deadlineBlock) && !blockQuestion
         // Once answered (or when there's nothing to ask), the block stays one tap away
         ? chip(d.deadlineBlock ? `In ${d.deadlineBlock} block${blockStart ? ` · ${fmtT(D.parseHM(blockStart))}` : ''}` : `+ ${test ? 'Test' : 'Due'} block`, () => openBlockPicker(d.deadlineDate, d.kind, d.deadlineBlock, (L) => { d.deadlineBlock = L; if (L) d.deadlineTime = null; for (const f of d.flags) if (f.field === 'deadlineTime') f.resolved = true; render(); }),
           { aria: d.deadlineBlock ? `In ${d.deadlineBlock} block${blockStart ? ` · ${fmtT(D.parseHM(blockStart))}` : ''}. Change` : null, warn: blockOff, cls: !d.deadlineBlock && 'is-optional' })
@@ -668,7 +700,7 @@ function openBlockPicker(date, kind, current, onPick) {
     classes.length
       ? h('div', { class: 'quick-chips', role: 'group', 'aria-label': 'Class blocks' }, ...classes.map((c) =>
         button(`${c.letter} block · ${fmtT(D.parseHM(c.start))}`, () => { closeSheet(); onPick(c.letter); }, ['chip-btn', current === c.letter && 'is-on'].filter(Boolean).join(' '), { 'aria-pressed': String(current === c.letter) })))
-      : h('p', {}, schoolSet ? 'You have no classes that day.' : 'Set up your classes first: Edit schedule → Classes & free blocks.'),
+      : h('p', {}, schoolSet ? 'You have no classes that day.' : 'No class blocks are known for that day yet. Choose your week first (Saturday depends on it).'),
     h('div', { class: 'actions' }, button('Not in a class', () => { closeSheet(); onPick(null); }, 'btn-ghost')),
   ]);
 }
@@ -1096,7 +1128,7 @@ function daySlots(plan, date) {
   }
   const notes = [];
   if (unsetNote) notes.push(unsetNote);
-  if (school.noClasses) notes.push('No classes this day.');
+  if (school.noClasses) notes.push(school.satOff ? 'No Saturday classes. Tap the day if there are.' : 'No classes this day.');
   if (!ds.studyStart) notes.push(ds.noStudy ? 'Busy that evening.' : 'No study hours.');
   if (!slots.some((x) => !x.cls && !x.kept && !x.unset) && !notes.length) notes.push('No free time.');
   return { slots, notes, dueOther };
@@ -1112,7 +1144,14 @@ function openDaySheet(date) {
     return h('label', { class: 'switch-row', for: id }, h('input', { type: 'checkbox', role: 'switch', id, checked, onchange }), h('span', {}, h('strong', {}, label), h('span', { class: 'muted small block' }, sub)));
   };
   openSheet(D.formatDate(date, today()), [
-    school.configured ? sw('No classes this day', 'Day off, long weekend or special schedule', school.noClasses, (e) => commit(() => { if (e.target.checked) dayRecord(date).noClasses = true; else delete dayRecord(date).noClasses; }, 'Updated.')) : null,
+    school.configured && D.weekdayOf(date) === 6 ? h('div', { class: 'field' },
+      h('span', { class: 'field-label', id: `${date}-satq` }, 'Classes this Saturday'),
+      h('div', { class: 'block-grid', role: 'group', 'aria-labelledby': `${date}-satq` },
+        ...weekChoiceButtons(school.noClasses ? 'NONE' : school.weekType, (wk) => { closeSheet(); commit(() => {
+          const rec = dayRecord(date);
+          if (wk === 'NONE') { rec.noClasses = true; delete rec.satType; } else { delete rec.noClasses; rec.satType = wk; }
+        }, wk === 'NONE' ? 'No classes that Saturday.' : `${saturdayLetters(wk)} that Saturday.`); }, 'sat'))) : null,
+    school.configured && D.weekdayOf(date) !== 6 ? sw('No classes this day', 'Day off, long weekend or special schedule', school.noClasses, (e) => commit(() => { if (e.target.checked) dayRecord(date).noClasses = true; else delete dayRecord(date).noClasses; }, 'Updated.')) : null,
     sw('Busy that evening', 'No study hours (game, rehearsal, event)', !!day.noStudy, (e) => commit(() => { if (e.target.checked) dayRecord(date).noStudy = true; else delete dayRecord(date).noStudy; }, 'Updated.')),
     h('div', { class: 'field' }, h('span', { class: 'field-label' }, 'Add free time that day'),
       h('div', { class: 'quick-chips' }, ...[['Morning', '09:00', '12:00'], ['Afternoon', '13:00', '17:00']].map(([l, s, e]) =>
@@ -1245,7 +1284,7 @@ function openSchedule() {
         button('Other time…', () => openBlockEditor({ date: t, kind: 'free' }), 'chip-btn'))),
     h('h3', { class: 'small-heading' }, 'Usual schedule'),
     row('Classes & free blocks', sc ? `Free blocks ${sc.freeBlocks.join(', ') || 'none'}${(sc.keepFree || []).length ? ` (${sc.keepFree.join(', ')} kept free)` : ''}` : 'Tap your free blocks', openSchoolSetup, 'menu-classes'),
-    sc && school.weekType ? row('Week rotation', `This is an ${school.weekType} week · switch if a break changed it`, () => { closeSheet(); switchWeek(t, school.weekType); }, 'menu-rotation') : null,
+    sc ? row('Week rotation', sc.anchor ? `This is an ${school.weekType} week · change it after a break, or set no Saturday classes` : 'No Saturday classes · change it if Saturdays have classes', () => { closeSheet(); openWeekSheet(t); }, 'menu-rotation') : null,
     row('Study hours', studyHoursSummary().join(' · '), openStudyHoursEditor, 'menu-study'),
   ]);
 }
@@ -1387,7 +1426,7 @@ function openSchoolSetup() {
   const ext = new Set(sc ? sc.freeExt : []);
   const keep = new Set(sc ? sc.keepFree || [] : []);
   const t = today();
-  const current = sc ? weekTypeFor(app.state, t) : null;
+  const current = sc ? (sc.anchor ? weekTypeFor(app.state, t) : 'NONE') : null;
   const letterBox = h('div', { class: 'block-grid', role: 'group', 'aria-label': 'Free blocks' });
   const extBox = h('div', { class: 'block-grid', role: 'group', 'aria-label': 'Extension blocks you don\'t attend' });
   const keepBox = h('div', { class: 'block-grid', role: 'group', 'aria-label': 'Free blocks to keep free' });
@@ -1416,7 +1455,7 @@ function openSchoolSetup() {
       if (!picked) { err.textContent = 'Pick which week this is.'; return; }
       const useStudy = e.target.querySelector(`#${useStudyId}`).checked;
       commit((s) => {
-        s.settings.school = { id: 'middlesex', freeBlocks: [...free].sort(), freeExt: [...ext].filter((x) => !free.has(x[0])).sort(), anchor: { monday: mondayOf(t), type: picked.value } };
+        s.settings.school = { id: 'middlesex', freeBlocks: [...free].sort(), freeExt: [...ext].filter((x) => !free.has(x[0])).sort(), anchor: picked.value === 'NONE' ? null : { monday: mondayOf(t), type: picked.value } };
         const kf = [...keep].filter((L) => free.has(L)).sort();
         if (kf.length) s.settings.school.keepFree = kf;
         if (useStudy) ensureWeek(s).study = JSON.parse(JSON.stringify(MIDDLESEX.study));
@@ -1439,8 +1478,8 @@ function openSchoolSetup() {
     h('fieldset', { class: 'field' },
       h('legend', {}, '2. Which week is this?'),
       h('p', { class: 'hint' }, MIDDLESEX.weekTypeHint),
-      h('div', { class: 'segmented' }, ...MIDDLESEX.weekTypes.map((w) => h('label', { class: 'seg' },
-        h('input', { type: 'radio', name: wtName, value: w, checked: current === w }), h('span', {}, `${w} week`))))),
+      h('div', { class: 'segmented' }, ...[...MIDDLESEX.weekTypes.map((w) => [w, `${w} week`]), ['NONE', 'No Sat. classes']].map(([w, label]) => h('label', { class: 'seg' },
+        h('input', { type: 'radio', name: wtName, value: w, checked: current === w }), h('span', {}, label))))),
     h('label', { class: 'check-row', for: useStudyId },
       h('input', { type: 'checkbox', id: useStudyId, checked: !hasCustomStudy() }),
       h('span', {}, 'Use dorm study hours (Sun–Thu 7:30–9:30 PM, Fri 7:30–9:00 PM, none Sat)')),
@@ -1624,7 +1663,7 @@ function taskFields(draft, { compact = false, showFlags = true, idPrefix = uniqu
       timeLabel.textContent = test ? 'Test time (optional)' : 'Due time (optional)';
     }
   }
-  const showBlocks = !!app.state.settings.school || !!draft.deadlineBlock;
+  const showBlocks = !!app.state.settings.school || !app.state.prefs.setupNudgeDismissed || !!draft.deadlineBlock;
   function fillBlocks() {
     clear(blockSel);
     blockSel.append(h('option', { value: '' }, 'No block'));
