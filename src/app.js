@@ -275,11 +275,10 @@ function renderToday(week) {
   if (app.addOpen || app.addDraft || !open.length) put(root, addBox(open.length > 0));
   if (!open.length) {
     const guided = (app.mode === 'real' && !state.settings.school && !state.prefs.setupNudgeDismissed) || checklistOpen();
-    put(root, h('div', { class: 'empty' },
-      guided ? null : h('p', {}, 'Add what\'s due — one line is enough, like “Bio test Tuesday, study 45 min”.'),
-      app.mode === 'real' ? button('See an example day', enterDemo, 'btn-link') : null));
+    if (!guided) put(root, h('p', { class: 'empty-hint' }, 'Add what\'s due — one line is enough, like “Bio test Tuesday, study 45 min”.'));
     put(root, doneToday(t));
     if (week) put(root, todaySchedule(week.days[0], t)); // the day's timetable shows even before anything is added
+    if (app.mode === 'real') put(root, h('p', { class: 'example-link' }, button('See an example day', enterDemo, 'btn-link btn-small')));
     return;
   }
   if (!week) { put(root, h('p', { class: 'alert alert-danger' }, 'Something went wrong making your plan. Your tasks are safe.')); return; }
@@ -307,15 +306,21 @@ async function switchWeek(date, current) {
 }
 
 // ---------- first-run setup (inline, two taps) ----------
+/** "E, C, F" — the class blocks that meet on Saturday in a week type. */
+function saturdayLetters(weekType) {
+  const sat = (MIDDLESEX.grid[weekType] && MIDDLESEX.grid[weekType][6]) || [];
+  return [...new Set(sat.map((p) => p.code[0]))].join(', ');
+}
+
 // ---------- getting started ----------
 function checklistSteps() {
   const st = app.state;
   const skipped = !st.settings.school && !!st.prefs.setupNudgeDismissed;
   const set = !!st.settings.school || skipped;
   return [
-    { label: 'Check your timetable: choose ECF or ADB.', done: set },
+    { label: `Check which blocks meet this Saturday (${MIDDLESEX.weekTypes.map(saturdayLetters).join(' or ')}).`, done: set },
     { label: 'Mark your free blocks: tell Blockwise when you can work.', done: set },
-    { label: 'Add something due, with how long it needs. For a test, that\'s study time, not how long the test lasts.', done: st.tasks.length > 0 },
+    { label: 'Add something due and how long it will take.', done: st.tasks.length > 0 },
     { label: 'Review your next step: change anything that doesn\'t fit.', done: !!st.prefs.reviewedNext },
   ];
 }
@@ -335,7 +340,14 @@ function checklistCard() {
     h('div', { class: 'checklist-head' },
       h('p', { class: 'callout-title' }, `Getting started · ${n} of ${steps.length} done`),
       button('Hide', () => commit((s) => { s.prefs.checklistDismissed = true; }, 'You can find it again in ⋯ → How to use Blockwise.'), 'btn-link btn-small', { 'aria-label': 'Hide the getting started list' })),
-    checklistList(steps));
+    checklistList(steps),
+    scheduleTip());
+}
+
+/** Optional, never a required step: where one-day changes live (the app's real control names). */
+function scheduleTip() {
+  return h('p', { class: 'checklist-tip' }, h('strong', {}, 'Day off or schedule change? '),
+    'On Week, tap that day and turn on “No classes this day” or “Busy that evening.” For today, use Edit schedule.');
 }
 
 /** Step 4 is done once the student looks at or changes a suggestion. */
@@ -350,6 +362,7 @@ function openHowTo() {
   const dismissed = app.mode === 'real' && app.state.prefs.checklistDismissed && checklistSteps().some((x) => !x.done);
   openSheet('How to use Blockwise', [
     checklistList(checklistSteps()),
+    scheduleTip(),
     h('h3', { class: 'small-heading' }, 'Every day'),
     h('ul', { class: 'steps' },
       h('li', {}, h('strong', {}, 'Today'), ' shows what to do now and the rest of your day, block by block.'),
@@ -374,19 +387,23 @@ function setupCard() {
     for (const L of MIDDLESEX.blocks) letters.append(h('button', { type: 'button', class: 'block-chip', 'aria-pressed': String(free.has(L)), onclick: () => { if (free.has(L)) { free.delete(L); keep.delete(L); } else free.add(L); draw(); } }, L));
     for (const L of [...free].sort()) keepBox.append(h('button', { type: 'button', class: 'block-chip', 'aria-pressed': String(keep.has(L)), 'aria-label': `Keep ${L} block free`, onclick: () => { keep.has(L) ? keep.delete(L) : keep.add(L); draw(); } }, L));
     keepWrap.hidden = !free.size;
-    for (const w of MIDDLESEX.weekTypes) weeks.append(h('button', { type: 'button', class: 'block-chip wide', 'aria-pressed': String(wk === w), onclick: () => { wk = w; err.textContent = ''; draw(); } }, `${w} week`));
+    for (const w of MIDDLESEX.weekTypes) {
+      weeks.append(h('button', { type: 'button', class: 'block-chip wide week-choice', 'aria-pressed': String(wk === w), onclick: () => { wk = w; err.textContent = ''; draw(); } },
+        h('span', { class: 'wk-letters' }, saturdayLetters(w)), h('span', { class: 'wk-name' }, `${w} week`)));
+    }
   };
   draw();
   return h('section', { class: 'setup', 'aria-label': 'Set up your classes' },
     h('p', { class: 'callout-title' }, 'Getting started'),
     checklistList(checklistSteps()),
-    h('p', { class: 'setup-q' }, '1. Is this an ECF or ADB week?', h('span', { class: 'hint block' }, 'Look at this Saturday in your planner: E, C, F blocks or A, D, B blocks.')), weeks,
+    h('p', { class: 'setup-q' }, '1. Which blocks meet this Saturday?', h('span', { class: 'hint block' }, 'Look at Saturday in your planner.')), weeks,
+    h('p', { class: 'hint' }, 'No classes this Saturday, or not sure? Pick one — you can switch it any time with the week button on Today.'),
     h('p', { class: 'setup-q' }, '2. Which blocks are free for you?', h('span', { class: 'hint block' }, 'Blocks with no class. Blockwise plans work in these.')), letters,
     keepWrap,
     err,
     h('div', { class: 'actions' },
       button('Save', () => {
-        if (!wk) { err.textContent = 'Pick ECF or ADB.'; return; }
+        if (!wk) { err.textContent = 'Pick the blocks that meet this Saturday.'; return; }
         commit((s) => {
           s.settings.school = { id: 'middlesex', freeBlocks: [...free].sort(), freeExt: [], anchor: { monday: mondayOf(today()), type: wk } };
           if (keep.size) s.settings.school.keepFree = [...keep].filter((L) => free.has(L)).sort();
@@ -419,6 +436,7 @@ function addBox(canClose) {
     app.voiceState ? voicePanel() : null,
     !voiceOk ? h('p', { class: 'hint' }, VOICE_ERRORS.unsupported) : null,
     app.addDraft ? draftLine(app.addDraft) : null,
+    !canClose && !app.addDraft ? h('p', { class: 'hint add-hint' }, 'For a test, give the study time — not how long the test lasts.') : null,
     canClose && !app.addDraft ? h('div', { class: 'add-foot' },
       button('Paste a list instead', () => openCapture({ bulk: true }), 'btn-link btn-small'),
       button('Close', () => { app.addOpen = false; app.addText = ''; stopVoice(); render(); }, 'btn-link btn-small', { 'data-key': 'add-close' })) : null);
@@ -863,8 +881,8 @@ function renderWeek(week) {
 function slotRow(sl) {
   if (sl.unset) {
     return h('li', { class: 'slot is-class is-unset' },
-      h('div', { class: 'slot-when' }, h('span', { class: 'slot-name' }, sl.name)),
-      h('div', { class: 'slot-what' }, h('span', { class: 'class-label' }, 'Not set yet'), h('span', { class: 'slot-time' }, fmtRange(sl.s, sl.e))));
+      h('div', { class: 'slot-when' }, h('span', { class: 'slot-name' }, sl.name), h('span', { class: 'slot-time' }, fmtRange(sl.s, sl.e))),
+      h('div', { class: 'slot-what' }, h('span', { class: 'class-label' }, 'Not set yet')));
   }
   const nameEl = sl.letter
     ? h('button', { type: 'button', class: 'slot-name slot-btn', onclick: () => openBlockSheet(sl.date, sl.letter), 'aria-label': `${sl.name}, ${fmtRange(sl.s, sl.e)}. ${sl.kept ? 'Kept free' : 'Free'}. Change` }, sl.name)
@@ -876,8 +894,8 @@ function slotRow(sl) {
   }
   if (sl.cls) {
     return h('li', { class: 'slot is-class' },
-      h('div', { class: 'slot-when' }, h('span', { class: 'slot-name' }, sl.name)),
-      h('div', { class: 'slot-what' }, h('span', { class: 'class-label' }, 'Class'), h('span', { class: 'slot-time' }, fmtRange(sl.s, sl.e))));
+      h('div', { class: 'slot-when' }, h('span', { class: 'slot-name' }, sl.name), h('span', { class: 'slot-time' }, fmtRange(sl.s, sl.e))),
+      h('div', { class: 'slot-what' }, h('span', { class: 'class-label' }, 'Class')));
   }
   if (sl.past) {
     return h('li', { class: 'slot' },
