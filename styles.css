@@ -175,6 +175,8 @@ main { max-width: 560px; margin: 0 auto; padding: 16px; outline: none; }
 .now-actions { margin-top: 14px; }
 .now-actions .btn { flex: 1 1 8rem; }
 .why-link { margin-top: 4px; padding-left: 0; }
+.now-links { display: flex; gap: 14px; align-items: center; }
+.now-links .btn { margin-top: 4px; }
 
 .alerts { margin: 12px 0 0; display: flex; flex-direction: column; gap: 6px; }
 .alert { margin: 0; padding: 8px 12px; border-radius: 10px; background: var(--surface-2); color: var(--ink-2); font-size: 0.93rem; }
@@ -227,7 +229,8 @@ main { max-width: 560px; margin: 0 auto; padding: 16px; outline: none; }
 /* Something due in this block (a test, or work handed in in class): name + tag, no minutes */
 .slot.has-due .slot-name { color: var(--ink); font-weight: 600; }
 .slot.is-past.has-due .slot-name { color: var(--muted); font-weight: 500; }
-.slot-due { display: flex; flex-wrap: wrap; align-items: center; column-gap: 8px; }
+.slot-due { margin: 0; font-weight: 500; overflow-wrap: anywhere; display: flex; flex-wrap: wrap; align-items: center; column-gap: 8px; }
+.slot-due .task-link { font-size: 0.97rem; padding: 2px 0; min-height: 28px; }
 .due-pill { display: inline-block; padding: 1px 10px; border-radius: 999px; border: 1px solid var(--warn-line); background: var(--warn-bg); color: var(--warn-ink); font-size: 0.82rem; font-weight: 700; white-space: nowrap; }
 .now-tag { display: inline-block; margin-top: 2px; font-size: 0.75rem; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--accent); }
 .slot-btn { background: none; border: 0; padding: 0; min-height: 24px; text-align: left; font: inherit; font-weight: 600; font-size: 0.93rem; cursor: pointer; text-decoration: underline dotted 1px; text-decoration-color: var(--line-strong); text-underline-offset: 4px; }
@@ -253,6 +256,14 @@ main { max-width: 560px; margin: 0 auto; padding: 16px; outline: none; }
 .steps { margin: 4px 0 10px; padding-left: 1.3rem; }
 .steps li { margin: 4px 0; }
 .draft-chip.is-quiet { background: transparent; border-style: dashed; color: var(--ink-2); font-weight: 500; }
+/* A time set by a block: shown, but read-only and visibly so */
+.field input[type="time"]:disabled { color: var(--muted); background: transparent; border-style: dashed; cursor: not-allowed; }
+.draft-ask { margin-top: 10px; padding: 10px 12px; border: 1px solid var(--accent-line); border-radius: 12px; background: var(--accent-soft); }
+.draft-ask-q { margin: 0 0 8px; font-weight: 600; }
+.draft-ask-date { font-weight: 500; color: var(--ink-2); white-space: nowrap; }
+.today-tip { margin: -2px 0 6px; }
+.draft-ask .quick-chips { gap: 8px; }
+.draft-chip.is-optional { background: transparent; border-style: dashed; border-color: var(--accent-line); color: var(--accent); }
 .chip-btn.is-on { background: var(--primary); border-color: var(--primary); color: #fff; }
 .day-note { margin: 6px 0 0; color: var(--muted); font-size: 0.9rem; }
 .day-warn { margin: 6px 0 0; color: var(--danger-ink); font-size: 0.92rem; }
@@ -439,21 +450,23 @@ body.intro-on { padding-bottom: 24px; }
 .intro-title:focus { outline: none; }
 .intro-title:focus-visible { outline: 2px solid var(--focus); outline-offset: 4px; border-radius: 6px; }
 .intro-title-2 { display: block; color: var(--accent); }
-.intro-lead { margin: 0 0 16px; font-size: 1.08rem; line-height: 1.45; color: var(--ink-2); }
+.intro-sub { margin: 0 0 6px; font-size: 1.12rem; line-height: 1.35; font-weight: 700; color: var(--ink); }
+.intro-lead { margin: 0 0 14px; font-size: 1rem; line-height: 1.45; color: var(--ink-2); }
 .intro-actions { display: flex; flex-direction: column; gap: 10px; margin-top: 16px; }
 .intro-actions .btn { width: 100%; min-height: 50px; font-size: 1.02rem; }
-.intro-fine { margin: 12px 0 0; text-align: center; font-size: 0.85rem; color: var(--muted); }
+.intro-fine { margin: 12px 0 0; text-align: center; font-size: 0.85rem; line-height: 1.6; color: var(--muted); }
+.intro-fine strong { color: var(--ink-2); font-weight: 600; font-size: 0.92rem; }
 
 .intro-demo { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; }
 .idemo-task { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 10px; padding: 8px 10px; border-radius: 10px; background: var(--surface-2); border: 1px solid var(--line-strong); }
 .idemo-title { font-weight: 700; }
 .idemo-meta { flex-basis: 100%; font-size: 0.86rem; color: var(--ink-2); }
 .idemo-link { margin: 6px 0; font-size: 0.82rem; color: var(--muted); }
-.idemo-row { display: grid; grid-template-columns: 7.6rem 1fr; gap: 10px; align-items: center; padding-top: 8px; border-top: 1px solid var(--line); }
+.idemo-row { display: grid; grid-template-columns: auto 1fr; gap: 12px; align-items: center; padding-top: 8px; border-top: 1px solid var(--line); }
 .idemo-slot { display: grid; justify-items: start; align-items: center; min-height: 30px; }
 .idemo-slot > * { grid-area: 1 / 1; }
-.idemo-session { font-weight: 600; padding: 3px 10px; border-radius: 8px; background: var(--accent-soft); border: 1px solid var(--accent-line); white-space: nowrap; }
-.idemo-session .mins { margin-left: 8px; color: var(--ink-2); font-weight: 400; font-size: 0.9rem; }
+.idemo-session { font-weight: 600; padding: 3px 10px; border-radius: 8px; background: var(--accent-soft); border: 1px solid var(--accent-line); }
+.idemo-session .mins { margin-left: 8px; color: var(--ink-2); font-weight: 400; font-size: 0.9rem; white-space: nowrap; }
 /* Plays once: the Free tag gives way as the study session drops in from the test card. */
 .idemo-free { animation: idemo-out 0.25s ease 1.1s both; }
 .idemo-session { animation: idemo-drop 0.75s cubic-bezier(0.2, 0.8, 0.2, 1) 0.9s both; }

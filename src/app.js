@@ -309,17 +309,18 @@ function introScreen() {
   };
   return h('section', { class: 'intro', 'aria-labelledby': 'intro-title' },
     h('h1', { id: 'intro-title', class: 'intro-title', tabindex: '-1' }, 'Free block. ', h('span', { class: 'intro-title-2' }, 'Now what?')),
-    h('p', { class: 'intro-lead' }, 'Add what\'s due. Blockwise picks what to start, when, and for how long — around your classes and free blocks. You can change anything.'),
+    h('p', { class: 'intro-sub' }, 'Make the most of your free blocks and study hours.'),
+    h('p', { class: 'intro-lead' }, 'Add what\'s due and how long it\'ll take. Blockwise builds a study plan around your classes, and adjusts it automatically when you change a task or your schedule.'),
     introDemo(),
     h('div', { class: 'intro-actions' },
       button('Plan my next free block', start, 'btn-primary intro-go', { 'data-key': 'intro-go' }),
       button('See an example', enterDemo, 'btn-secondary', { 'data-key': 'intro-example' })),
-    h('p', { class: 'intro-fine' }, 'Free · No account · Saved only on your device'));
+    h('p', { class: 'intro-fine' }, h('strong', {}, 'Spend less time planning. Know what to start next.'), h('br'), 'Free · No account · Saved only on your device'));
 }
 
 /** A tiny picture of the one idea: a test on Friday becomes study time in a free block before it. Plays once. */
 function introDemo() {
-  return h('div', { class: 'intro-demo', role: 'img', 'aria-label': 'Example: a Bio test on Friday in D block becomes a 45-minute study session in Thursday\'s free A block.' },
+  return h('div', { class: 'intro-demo', role: 'img', 'aria-label': 'Example: a Bio test on Friday in D block. Blockwise plans 45 minutes of study for it in Thursday\'s free A block.' },
     h('div', { class: 'idemo-task', 'aria-hidden': 'true' },
       h('span', { class: 'idemo-title' }, 'Bio test'),
       h('span', { class: 'due-pill' }, 'Test'),
@@ -329,7 +330,7 @@ function introDemo() {
       h('span', { class: 'idemo-when' }, h('span', { class: 'slot-name' }, 'Thu · A block')),
       h('span', { class: 'idemo-slot' },
         h('span', { class: 'free-pill idemo-free' }, 'Free'),
-        h('span', { class: 'idemo-session' }, 'Bio test', h('span', { class: 'mins' }, '45 m')))));
+        h('span', { class: 'idemo-session' }, 'Study for Bio test', h('span', { class: 'mins' }, '45 min')))));
 }
 
 /** “ECF week ⇄” — one tap to switch the alternation if a break threw it off. */
@@ -539,17 +540,42 @@ function draftLine(d) {
   else if (guessTime) notes.push(test ? `${fmtDur(d.remainingMin)} of study is a guess — tap it to change.` : `${fmtDur(d.remainingMin)} is a guess — tap it to change.`);
   const alt = amb && amb.alternatives && amb.alternatives[0];
   const v = validateDraft(d);
+  // Ask for the block right here, while adding (not later on Week): the classes that meet that day, one tap each.
+  // Optional — skipped when a block or a time was typed, when no classes meet that day, or once answered for this date.
+  const pickBlock = (L) => {
+    d.deadlineBlock = L; d.blockAnsweredFor = d.deadlineDate;
+    if (L) d.deadlineTime = null;
+    for (const f of d.flags) if (f.field === 'deadlineTime') f.resolved = true;
+    render();
+    document.querySelector('[data-key="draft-save"]')?.focus({ preventScroll: true });
+  };
+  const askClasses = d.deadlineDate && schoolSet && !d.deadlineBlock && !d.deadlineTime && d.blockAnsweredFor !== d.deadlineDate
+    ? classBlocksOn(app.state, d.deadlineDate) : [];
+  const askId = uniqueId('ask');
+  const askDate = d.deadlineDate ? `${D.formatDate(d.deadlineDate, t)}${D.weekdayOf(d.deadlineDate) === 6 ? ` · ${weekTypeFor(app.state, d.deadlineDate)} week` : ''}` : '';
+  const blockQuestion = askClasses.length ? h('div', { class: 'draft-ask', role: 'group', 'aria-labelledby': askId },
+    h('p', { class: 'draft-ask-q', id: askId }, test ? 'Which block is the test in?' : 'Due in a class? Which block?', ' ', h('span', { class: 'draft-ask-date' }, askDate)),
+    h('div', { class: 'quick-chips' },
+      ...askClasses.map((c) => button(`${c.letter} · ${fmtT(D.parseHM(c.start))}`, () => pickBlock(c.letter), 'chip-btn', { 'data-key': `ask-${c.letter}` })),
+      button('Other time…', () => askDraftTime(d), 'chip-btn', { 'data-key': 'ask-time' }),
+      button('Skip', () => pickBlock(null), 'chip-btn', { 'data-key': 'ask-skip' }))) : null;
+  // No block and no time: say what that means (due when the day starts, so the work happens the day before).
+  if (d.deadlineDate && d.deadlineDate > t && !d.deadlineBlock && !d.deadlineTime && !askClasses.length && !amb) {
+    notes.push(`No block or time, so it counts as due at the start of ${D.formatDate(d.deadlineDate, t)}: ${test ? 'study' : 'work'} is planned to finish the day before.`);
+  }
   return h('section', { class: 'draft', 'aria-label': 'Check before saving' },
     h('div', { class: 'draft-chips' },
       chip(d.title || 'Add a title', () => editDraftTitle(d), { aria: `Title: ${d.title || 'missing'}. Change`, warn: !d.title }),
       chip(KIND_LABELS[d.kind], () => { d.kind = d.kind === 'assignment' ? 'project' : d.kind === 'project' ? 'test' : 'assignment'; if (guessTime) { d.suggestedMin = SUGGESTED_MINUTES[d.kind]; d.remainingMin = d.suggestedMin; } render(); }, { aria: `Type: ${KIND_LABELS[d.kind]}. Tap to change` }),
       chip(due, () => editDraftDue(d), { aria: `${due}. Change`, warn: !d.deadlineDate || !!amb }),
-      d.deadlineDate && (schoolSet || d.deadlineBlock)
-        ? chip(d.deadlineBlock ? `${d.deadlineBlock} block` : '+ Block', () => openBlockPicker(d.deadlineDate, d.kind, d.deadlineBlock, (L) => { d.deadlineBlock = L; if (L) d.deadlineTime = null; for (const f of d.flags) if (f.field === 'deadlineTime') f.resolved = true; render(); }),
-          { aria: d.deadlineBlock ? `${d.deadlineBlock} block. Change` : 'Block: add the class it\'s in', warn: blockOff, cls: !d.deadlineBlock && 'is-quiet' })
+      d.deadlineDate && (schoolSet || d.deadlineBlock) && !blockQuestion
+        // Once answered (or when there's nothing to ask), the block stays one tap away
+        ? chip(d.deadlineBlock ? `In ${d.deadlineBlock} block${blockStart ? ` · ${fmtT(D.parseHM(blockStart))}` : ''}` : `+ ${test ? 'Test' : 'Due'} block`, () => openBlockPicker(d.deadlineDate, d.kind, d.deadlineBlock, (L) => { d.deadlineBlock = L; if (L) d.deadlineTime = null; for (const f of d.flags) if (f.field === 'deadlineTime') f.resolved = true; render(); }),
+          { aria: d.deadlineBlock ? `In ${d.deadlineBlock} block${blockStart ? ` · ${fmtT(D.parseHM(blockStart))}` : ''}. Change` : null, warn: blockOff, cls: !d.deadlineBlock && 'is-optional' })
         : null,
       chip(test ? `Study ${guessTime ? '~' : ''}${mins}${guessTime ? '?' : ''}` : `${guessTime ? '~' : ''}${mins}${guessTime ? '?' : ''} of work`, () => editDraftTime(d),
         { aria: `${test ? `Study ${mins}` : `${mins} of work`}${guessTime ? ', a guess' : ''}. Change`, warn: guessTime })),
+    blockQuestion,
     notes.length ? h('p', { class: 'draft-note' }, notes.join(' '),
       alt ? button(alt.date ? `Use ${alt.label}` : `Use ${alt.label}`, () => {
         if (alt.date) d.deadlineDate = alt.date;
@@ -597,6 +623,24 @@ function editDraftDue(d) {
     h('div', { class: 'actions' },
       button('Use this date', () => { if (D.isValidISODate(dateIn.value)) set(dateIn.value); else dateIn.focus(); }, 'btn-primary'),
       button('No due date', () => { d.deadlineDate = null; d.deadlineTime = null; d.deadlineBlock = null; for (const f of d.flags) if (f.field.startsWith('deadline')) f.resolved = true; closeSheet(); render(); }, 'btn-ghost')),
+  ]);
+}
+
+/** "Other time…" from the block question: just the time, for that date (e.g. due 8 PM, or online at 11:59 PM). */
+function askDraftTime(d) {
+  const id = uniqueId('at');
+  const inp = h('input', { id, type: 'time', value: d.deadlineTime || '' });
+  openSheet(d.kind === 'test' ? 'What time is the test?' : 'What time is it due?', [
+    h('p', { class: 'hint' }, D.formatDate(d.deadlineDate, today())),
+    h('form', { class: 'stack', novalidate: true, onsubmit: (e) => {
+      e.preventDefault();
+      if (!/^\d{2}:\d{2}$/.test(inp.value)) { inp.focus(); return; }
+      d.deadlineTime = inp.value; d.deadlineBlock = null; d.blockAnsweredFor = d.deadlineDate;
+      for (const f of d.flags) if (f.field === 'deadlineTime') f.resolved = true;
+      closeSheet(); render();
+    } },
+      h('div', { class: 'field' }, h('label', { for: id }, 'Time'), inp),
+      h('div', { class: 'actions' }, h('button', { type: 'submit', class: 'btn btn-primary' }, 'Use this time'))),
   ]);
 }
 
@@ -711,7 +755,9 @@ function nowCard(plan, t, week) {
     h('div', { class: 'actions now-actions' },
       button('Done', () => openDone(item, task), 'btn-primary btn-large', { 'data-key': 'now-done' }),
       button('Not now', () => notNow(t, task), 'btn-secondary btn-large', { 'data-key': 'now-skip' })),
-    button('Why this?', () => openWhy(plan, item, task), 'btn-link btn-small why-link'));
+    h('div', { class: 'now-links' },
+      button('Why this?', () => openWhy(plan, item, task), 'btn-link btn-small why-link'),
+      button('Edit', () => openEditTask(task.id), 'btn-link btn-small', { 'aria-label': `Edit ${task.title}: due date, time left, priority`, 'data-key': 'now-edit' })));
 }
 
 /** “Test tomorrow. 45 min of 1 h left.” (+ turn-taking when two things are due). */
@@ -845,6 +891,12 @@ function openOverflowHelp() {
 }
 
 /** A task's name as a button that opens it (edit, mark done, delete). */
+/** In a block's row: study time for a test reads "Study for Bio test", so it can't be mistaken for the test itself. */
+function workLink(task) {
+  if (task.kind !== 'test') return taskLink(task);
+  const label = /^(study|prep|review|revise)\b/i.test(task.title) ? task.title : `Study for ${task.title}`;
+  return h('button', { type: 'button', class: 'task-link', onclick: () => openEditTask(task.id) }, label);
+}
 function taskLink(task, extra = null) {
   return h('button', { type: 'button', class: 'task-link', onclick: () => openEditTask(task.id) }, task.title,
     task.kind === 'test' ? h('span', { class: 'tag-test' }, 'test') : null, extra);
@@ -892,6 +944,7 @@ function todaySchedule(plan, t) {
   return h('section', { class: 'list-section', 'aria-label': 'Today\'s blocks' },
     h('div', { class: 'day-card today-card' },
       h('h2', { class: 'today-card-title' }, 'Today\'s blocks'),
+      app.state.tasks.some((x) => x.status === 'open') ? h('p', { class: 'hint today-tip' }, 'Tap a task to edit it.') : null,
       info.dueOther.length ? h('p', { class: 'day-due' }, 'Due today: ', ...joinNodes(info.dueOther.map((x) => taskLink(x, x.deadline.time && !x.deadline.block ? h('span', { class: 'muted small' }, ` · ${fmtT(D.parseHM(x.deadline.time))}`) : x.deadline.block ? h('span', { class: 'muted small' }, ` · ${x.deadline.block} block`) : null)))) : null,
       lis.length ? h('ul', { class: 'slots' }, ...lis) : null,
       allOver ? h('p', { class: 'day-note' }, 'No more scheduled blocks today.') : null,
@@ -906,7 +959,7 @@ function renderWeek(week) {
     h('div', { class: 'week-title-row' }, h('h1', { id: 'week-title', tabindex: '-1' }, 'This week'),
       button('Edit schedule', openSchedule, 'btn-link btn-small head-edit', { 'data-key': 'head-edit-week' })),
     h('p', { class: 'lead' }, 'Your free blocks and study hours, filled in for you.'),
-    h('p', { class: 'hint' }, 'This updates by itself as you add things or tap Done and Not now. Tap a day for a day off or a busy evening, or a free block to keep it free.')));
+    h('p', { class: 'hint' }, 'Updates by itself as you add, finish or change things. Tap a task to change its due date, time left or priority. Tap a day for a day off or a busy evening, or a free block to keep it free.')));
   if (!week) { put(root, h('p', { class: 'alert alert-danger' }, 'Something went wrong making your plan. Your tasks are safe.')); return; }
   if (!app.state.settings.school) {
     put(root, h('section', { class: 'callout-card', 'aria-label': 'Set up your free blocks' },
@@ -950,7 +1003,7 @@ function renderWeek(week) {
 
 function slotRow(sl) {
   // What's due in this block: the task's name and a "Test"/"Due" tag, never minutes (minutes mean work time).
-  const dueEls = (sl.due || []).map((task) => h('p', { class: 'slot-task slot-due' },
+  const dueEls = (sl.due || []).map((task) => h('p', { class: 'slot-due' },
     h('button', { type: 'button', class: 'task-link', onclick: () => openEditTask(task.id) }, task.title),
     h('span', { class: 'due-pill' }, task.kind === 'test' ? 'Test' : 'Due')));
   const hasDue = dueEls.length > 0;
@@ -981,7 +1034,7 @@ function slotRow(sl) {
   return h('li', { class: ['slot', free && 'is-free', hasDue && 'has-due'] },
     h('div', { class: 'slot-when' }, nameEl, h('span', { class: 'slot-time' }, fmtRange(sl.s, sl.e))),
     h('div', { class: 'slot-what' }, ...dueEls,
-      ...sl.items.map((m) => { const task = taskById(m.taskId); return h('p', { class: 'slot-task' }, task ? taskLink(task) : 'Task', h('span', { class: 'mins' }, fmtShort(m.minutes))); }),
+      ...sl.items.map((m) => { const task = taskById(m.taskId); return h('p', { class: 'slot-task' }, task ? workLink(task) : 'Task', h('span', { class: 'mins' }, fmtShort(m.minutes))); }),
       free ? h('span', { class: 'free-pill' }, 'Free')
         : sl.freeTail >= 15 ? h('span', { class: 'free-pill' }, `Free · ${fmtShort(sl.freeTail)}`) : null));
 }
@@ -1549,15 +1602,28 @@ function taskFields(draft, { compact = false, showFlags = true, idPrefix = uniqu
     } }), h('span', {}, KIND_LABELS[k]))));
   const dateLabel = h('label', { for: id('date') });
   const timeLabel = h('label', { for: id('time') });
-  const dateIn = h('input', { id: id('date'), type: 'date', value: draft.deadlineDate || '', disabled, 'aria-describedby': `${id('meaning')} ${id('deadlineDate-err')}`, onchange: (e) => { draft.deadlineDate = e.target.value || null; resolveFlags('deadline'); fillBlocks(); updateMeaning(); } });
+  const dateIn = h('input', { id: id('date'), type: 'date', value: draft.deadlineDate || '', disabled, 'aria-describedby': `${id('meaning')} ${id('deadlineDate-err')}`, onchange: (e) => { draft.deadlineDate = e.target.value || null; resolveFlags('deadline'); fillBlocks(); syncTime(); updateMeaning(); } });
   const timeIn = h('input', { id: id('time'), type: 'time', value: draft.deadlineBlock ? '' : (draft.deadlineTime || ''), disabled: disabled || !!draft.deadlineBlock, 'aria-describedby': `${id('meaning')} ${id('deadlineTime-err')}`, onchange: (e) => { draft.deadlineTime = e.target.value || null; if (draft.deadlineTime) { draft.deadlineBlock = null; fillBlocks(); } resolveFlags('deadlineTime'); updateMeaning(); } });
   const blockLabel = h('label', { for: id('block') });
   const blockSel = h('select', { id: id('block'), disabled, onchange: (e) => {
     draft.deadlineBlock = e.target.value || null;
-    if (draft.deadlineBlock) { draft.deadlineTime = null; timeIn.value = ''; }
-    timeIn.disabled = disabled || !!draft.deadlineBlock;
+    draft.deadlineTime = null; // a block sets its own time; removing the block doesn't leave its start time behind
+    syncTime();
     updateMeaning();
   } });
+  // With a block chosen, the time box shows when that block starts (greyed out), never a stale or placeholder time.
+  function syncTime() {
+    const test = draft.kind === 'test';
+    if (draft.deadlineBlock) {
+      timeIn.value = (draft.deadlineDate && blockStartOn(app.state, draft.deadlineDate, draft.deadlineBlock)) || '';
+      timeIn.disabled = true;
+      timeLabel.textContent = `${test ? 'Test' : 'Due'} time (from ${draft.deadlineBlock} block)`;
+    } else {
+      timeIn.value = draft.deadlineTime || '';
+      timeIn.disabled = !!disabled;
+      timeLabel.textContent = test ? 'Test time (optional)' : 'Due time (optional)';
+    }
+  }
   const showBlocks = !!app.state.settings.school || !!draft.deadlineBlock;
   function fillBlocks() {
     clear(blockSel);
@@ -1584,7 +1650,7 @@ function taskFields(draft, { compact = false, showFlags = true, idPrefix = uniqu
   function updateLabels() {
     const test = draft.kind === 'test';
     dateLabel.textContent = test ? 'Test date' : 'Due date';
-    timeLabel.textContent = test ? 'Test time (optional)' : 'Due time (optional)';
+    syncTime();
     minLabel.textContent = test ? 'Study time still needed (estimate, minutes)' : 'Time still needed (estimate, minutes)';
     blockLabel.textContent = test ? 'Which block is the test in? (optional)' : 'Due in a class block? (optional)';
     stepIn.placeholder = neutralFirstStep(draft.kind);
@@ -1617,7 +1683,7 @@ function taskFields(draft, { compact = false, showFlags = true, idPrefix = uniqu
       h('div', { class: 'field' }, timeLabel, timeIn, errorEl('deadlineTime'))),
     showBlocks ? h('div', { class: 'field' }, blockLabel, blockSel) : null,
     h('div', { class: 'deadline-meta' }, meaning,
-      button(draft.kind === 'test' ? 'No test date' : 'No deadline', () => { draft.deadlineDate = null; draft.deadlineTime = null; draft.deadlineBlock = null; dateIn.value = ''; timeIn.value = ''; timeIn.disabled = disabled; fillBlocks(); resolveFlags('deadline'); resolveFlags('deadlineTime'); updateMeaning(); }, 'btn-link btn-small', { disabled })),
+      button(draft.kind === 'test' ? 'No test date' : 'No deadline', () => { draft.deadlineDate = null; draft.deadlineTime = null; draft.deadlineBlock = null; dateIn.value = ''; fillBlocks(); syncTime(); resolveFlags('deadline'); resolveFlags('deadlineTime'); updateMeaning(); }, 'btn-link btn-small', { disabled })),
     h('div', { class: 'field' }, h('div', { class: 'label-row' }, minLabel, suggestedTag), minIn,
       compact ? null : h('div', { class: 'quick-chips', 'aria-label': 'Quick estimates' }, ...[15, 30, 45, 60, 90, 120].map((m) => button(fmtDur(m), () => { draft.remainingMin = m; minIn.value = String(m); updateSuggestedTag(); }, 'chip-btn', { disabled, 'aria-label': `Set estimate to ${fmtDur(m)}` }))),
       minHint, errorEl('remainingMin')),
