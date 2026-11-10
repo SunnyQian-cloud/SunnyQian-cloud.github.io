@@ -129,6 +129,7 @@ function dueLabel(task, t = today()) {
   const time = task.deadline.block ? ` in ${task.deadline.block} block` : task.deadline.time ? ` at ${fmtT(D.parseHM(task.deadline.time))}` : ' (date only)';
   return `${task.kind === 'test' ? 'Test' : 'Due'} ${['Today', 'Tomorrow', 'Yesterday'].includes(rel) ? rel.toLowerCase() : rel}${time}`;
 }
+const lowerFirst = (s) => s.charAt(0).toLowerCase() + s.slice(1);
 function remainingLabel(task) {
   if (task.status === 'done') return 'Done';
   const base = `${task.kind === 'test' ? 'Study' : 'About'} ${fmtDur(task.remainingMin)} ${task.kind === 'test' ? 'still needed' : 'left'}`;
@@ -207,6 +208,9 @@ function render() {
     key = active.dataset ? active.dataset.key : null;
     index = [...main.querySelectorAll(FOCUSABLE)].indexOf(active);
   }
+  const intro = showIntro();
+  if (intro) app.view = 'today';
+  document.body.classList.toggle('intro-on', intro);
   renderBanners();
   renderNav();
   let week = null;
@@ -254,6 +258,7 @@ const CATEGORY_LABEL = { activity: 'Activity', class: 'Class', meal: 'Meal', res
 
 function renderToday(week) {
   const root = clear($('#view-today'));
+  if (showIntro()) { put(root, introScreen()); return; }
   const t = today();
   const state = app.state;
   const school = schoolBlocksForDate(state, t);
@@ -287,6 +292,44 @@ function renderToday(week) {
   put(root, alerts(plan, t));
   put(root, doneToday(t));
   put(root, todaySchedule(plan, t));
+}
+
+// ---------- welcome screen (first visit only) ----------
+/** Brand-new visitors only: nothing saved, no schedule, not skipped. Anyone with data goes straight to Today. */
+function showIntro() {
+  const st = app.state;
+  return app.mode === 'real' && !st.prefs.introDone && !st.tasks.length && !st.settings.school && !st.prefs.setupNudgeDismissed && !isStandalone();
+}
+
+function introScreen() {
+  const start = () => {
+    commit((s) => { s.prefs.introDone = true; });
+    window.scrollTo(0, 0);
+    document.querySelector('[data-key="setup-title"]')?.focus({ preventScroll: true });
+  };
+  return h('section', { class: 'intro', 'aria-labelledby': 'intro-title' },
+    h('h1', { id: 'intro-title', class: 'intro-title', tabindex: '-1' }, 'Free block. ', h('span', { class: 'intro-title-2' }, 'Now what?')),
+    h('p', { class: 'intro-lead' }, 'Add what\'s due. Blockwise picks what to start, when, and for how long — around your classes and free blocks. You can change anything.'),
+    introDemo(),
+    h('div', { class: 'intro-actions' },
+      button('Plan my next free block', start, 'btn-primary intro-go', { 'data-key': 'intro-go' }),
+      button('See an example', enterDemo, 'btn-secondary', { 'data-key': 'intro-example' })),
+    h('p', { class: 'intro-fine' }, 'Free · No account · Saved only on your device'));
+}
+
+/** A tiny picture of the one idea: a test on Friday becomes study time in a free block before it. Plays once. */
+function introDemo() {
+  return h('div', { class: 'intro-demo', role: 'img', 'aria-label': 'Example: a Bio test on Friday in D block becomes a 45-minute study session in Thursday\'s free A block.' },
+    h('div', { class: 'idemo-task', 'aria-hidden': 'true' },
+      h('span', { class: 'idemo-title' }, 'Bio test'),
+      h('span', { class: 'due-pill' }, 'Test'),
+      h('span', { class: 'idemo-meta' }, 'Friday, D block · study 45 min')),
+    h('p', { class: 'idemo-link', 'aria-hidden': 'true' }, '↓ planned before the test'),
+    h('div', { class: 'idemo-row', 'aria-hidden': 'true' },
+      h('span', { class: 'idemo-when' }, h('span', { class: 'slot-name' }, 'Thu · A block')),
+      h('span', { class: 'idemo-slot' },
+        h('span', { class: 'free-pill idemo-free' }, 'Free'),
+        h('span', { class: 'idemo-session' }, 'Bio test', h('span', { class: 'mins' }, '45 m')))));
 }
 
 /** “ECF week ⇄” — one tap to switch the alternation if a break threw it off. */
@@ -769,9 +812,13 @@ function alerts(plan, t) {
   const live = rankTasks(app.state.tasks.filter((x) => x.status === 'open'), { date: t, today: t, refMin: nowMin(), earliestStudyMin: earliestStudyFn(app.state), skipped: new Set() });
   for (const a of live.attention) {
     out.push(h('p', { class: 'alert alert-warn' },
-      a.dueTodayDateOnly ? `“${a.task.title}” is due today (no time given). ` : `“${a.task.title}” was ${dueLabel(a.task, t).toLowerCase()}. `,
+      a.dueTodayDateOnly ? `“${a.task.title}” is due today (no time given). `
+        // Not over yet, but there's no free time left before it (e.g. a test in B block with no free block before it)
+        : a.state === 'beforeStudy' ? `“${a.task.title}”: ${dueLabel(a.task, t)}, with no free time left before it. `
+        : a.task.kind === 'test' ? `“${a.task.title}”: the test was ${lowerFirst(dueLabel(a.task, t).replace(/^Test /, ''))}. `
+        : `“${a.task.title}” was ${lowerFirst(dueLabel(a.task, t))}. `,
       button('Finished', () => completeTask(a.task.id), 'btn-link btn-small', { 'aria-label': `Finished ${a.task.title}` }),
-      button('Still doing it', () => commit(() => { taskById(a.task.id).lateWork = true; }, 'Added back as late work.'), 'btn-link btn-small', { 'aria-label': `Still doing ${a.task.title}` }),
+      a.task.kind === 'test' ? null : button('Still doing it', () => commit(() => { taskById(a.task.id).lateWork = true; }, 'Added back as late work.'), 'btn-link btn-small', { 'aria-label': `Still doing ${a.task.title}` }),
       button('Change date', () => openEditTask(a.task.id, 'deadline'), 'btn-link btn-small', { 'aria-label': `Change date for ${a.task.title}` })));
   }
   const skipped = daySettings(app.state, t).skipped.map(taskById).filter((x) => x && x.status === 'open');
@@ -826,7 +873,7 @@ function todaySchedule(plan, t) {
   const skipped = new Set(daySettings(app.state, t).skipped);
   const items = plan.items.filter((i) => i.type !== 'session' || (i.end > nm && !skipped.has(i.taskId) && taskById(i.taskId)?.status === 'open'));
   const info = daySlots({ ...plan, items }, t);
-  if (!info.slots.length && !info.notes.length) return null;
+  if (!info.slots.length && !info.notes.length && !info.dueOther.length) return null;
   const inProgress = info.slots.some((sl) => sl.s <= nm && sl.e > nm);
   const nextIdx = inProgress ? -1 : info.slots.findIndex((sl) => sl.s > nm);
   const lis = info.slots.map((sl, idx) => {
@@ -845,6 +892,7 @@ function todaySchedule(plan, t) {
   return h('section', { class: 'list-section', 'aria-label': 'Today\'s blocks' },
     h('div', { class: 'day-card today-card' },
       h('h2', { class: 'today-card-title' }, 'Today\'s blocks'),
+      info.dueOther.length ? h('p', { class: 'day-due' }, 'Due today: ', ...joinNodes(info.dueOther.map((x) => taskLink(x, x.deadline.time && !x.deadline.block ? h('span', { class: 'muted small' }, ` · ${fmtT(D.parseHM(x.deadline.time))}`) : x.deadline.block ? h('span', { class: 'muted small' }, ` · ${x.deadline.block} block`) : null)))) : null,
       lis.length ? h('ul', { class: 'slots' }, ...lis) : null,
       allOver ? h('p', { class: 'day-note' }, 'No more scheduled blocks today.') : null,
       ...info.notes.map((n) => h('p', { class: 'day-note' }, n))));
@@ -872,9 +920,9 @@ function renderWeek(week) {
   for (let i = 1; i < week.days.length; i++) {
     const plan = week.days[i];
     const date = plan.date;
-    const due = open.filter((x) => x.deadline && x.deadline.date === date);
     const short = week.shortfalls.filter((f) => f.date === date).map((f) => ({ f, task: taskById(f.taskId) })).filter((x) => x.task);
     const info = daySlots(plan, date);
+    const due = info.dueOther; // due in a class block → shown in that block's row instead
     const wt = D.weekdayOf(date) === 6 ? weekTypeFor(app.state, date) : null;
     list.append(h('li', { class: 'day-card' },
       h('div', { class: 'day-top' },
@@ -901,33 +949,38 @@ function renderWeek(week) {
 }
 
 function slotRow(sl) {
+  // What's due in this block: the task's name and a "Test"/"Due" tag, never minutes (minutes mean work time).
+  const dueEls = (sl.due || []).map((task) => h('p', { class: 'slot-task slot-due' },
+    h('button', { type: 'button', class: 'task-link', onclick: () => openEditTask(task.id) }, task.title),
+    h('span', { class: 'due-pill' }, task.kind === 'test' ? 'Test' : 'Due')));
+  const hasDue = dueEls.length > 0;
   if (sl.unset) {
-    return h('li', { class: 'slot is-class is-unset' },
+    return h('li', { class: ['slot is-class is-unset', hasDue && 'has-due'] },
       h('div', { class: 'slot-when' }, h('span', { class: 'slot-name' }, sl.name), h('span', { class: 'slot-time' }, fmtRange(sl.s, sl.e))),
-      h('div', { class: 'slot-what' }, h('span', { class: 'class-label' }, 'Not set yet')));
+      h('div', { class: 'slot-what' }, ...dueEls, h('span', { class: 'class-label' }, 'Not set yet')));
   }
   const nameEl = sl.letter
     ? h('button', { type: 'button', class: 'slot-name slot-btn', onclick: () => openBlockSheet(sl.date, sl.letter), 'aria-label': `${sl.name}, ${fmtRange(sl.s, sl.e)}. ${sl.kept ? 'Kept free' : 'Free'}. Change` }, sl.name)
     : h('span', { class: 'slot-name' }, sl.name);
   if (sl.kept) {
-    return h('li', { class: 'slot is-kept' },
+    return h('li', { class: ['slot is-kept', hasDue && 'has-due'] },
       h('div', { class: 'slot-when' }, nameEl, h('span', { class: 'slot-time' }, fmtRange(sl.s, sl.e))),
-      h('div', { class: 'slot-what' }, h('span', { class: 'class-label' }, sl.kept === 'always' ? 'Kept free' : 'Kept free this day')));
+      h('div', { class: 'slot-what' }, ...dueEls, h('span', { class: 'class-label' }, sl.kept === 'always' ? 'Kept free' : 'Kept free this day')));
   }
   if (sl.cls) {
-    return h('li', { class: 'slot is-class' },
+    return h('li', { class: ['slot is-class', hasDue && 'has-due'] },
       h('div', { class: 'slot-when' }, h('span', { class: 'slot-name' }, sl.name), h('span', { class: 'slot-time' }, fmtRange(sl.s, sl.e))),
-      h('div', { class: 'slot-what' }, h('span', { class: 'class-label' }, 'Class')));
+      h('div', { class: 'slot-what' }, ...(hasDue ? dueEls : [h('span', { class: 'class-label' }, 'Class')])));
   }
   if (sl.past) {
-    return h('li', { class: 'slot' },
+    return h('li', { class: ['slot', hasDue && 'has-due'] },
       h('div', { class: 'slot-when' }, h('span', { class: 'slot-name' }, sl.name), h('span', { class: 'slot-time' }, fmtRange(sl.s, sl.e))),
-      h('div', { class: 'slot-what' }, h('span', { class: 'class-label' }, 'Over')));
+      h('div', { class: 'slot-what' }, ...dueEls, h('span', { class: 'class-label' }, 'Over')));
   }
   const free = !sl.items.length;
-  return h('li', { class: ['slot', free && 'is-free'] },
+  return h('li', { class: ['slot', free && 'is-free', hasDue && 'has-due'] },
     h('div', { class: 'slot-when' }, nameEl, h('span', { class: 'slot-time' }, fmtRange(sl.s, sl.e))),
-    h('div', { class: 'slot-what' },
+    h('div', { class: 'slot-what' }, ...dueEls,
       ...sl.items.map((m) => { const task = taskById(m.taskId); return h('p', { class: 'slot-task' }, task ? taskLink(task) : 'Task', h('span', { class: 'mins' }, fmtShort(m.minutes))); }),
       free ? h('span', { class: 'free-pill' }, 'Free')
         : sl.freeTail >= 15 ? h('span', { class: 'free-pill' }, `Free · ${fmtShort(sl.freeTail)}`) : null));
@@ -966,21 +1019,34 @@ function daySlots(plan, date) {
     kept.push({ s, e, name: `${b.letter} block`, letter: b.letter, date, kept: b.keptWhy, items: [] });
   }
   slots.push(...kept);
-  for (const c of classPeriodsForDate(st, date)) slots.push({ s: c.start, e: c.end, name: `${c.code} block`, cls: true });
+  for (const c of classPeriodsForDate(st, date)) slots.push({ s: c.start, e: c.end, name: `${c.code} block`, block: c.code, cls: true });
   // Before setup: show the timetable, with each block's availability "not set" (nothing is planned in them).
   let unsetNote = null;
   if (!school.configured && !(st.days[date] && st.days[date].noClasses)) {
     const tt = timetableForDate(date);
     if (tt === null) unsetNote = `Saturday classes depend on the week (${MIDDLESEX.weekTypes.join(' or ')}). Set up your free blocks to see them.`;
-    else for (const c of tt) slots.push({ s: c.start, e: c.end, name: `${c.code} block`, unset: true });
+    else for (const c of tt) slots.push({ s: c.start, e: c.end, name: `${c.code} block`, block: c.code, unset: true });
   }
   slots.sort((a, c) => a.s - c.s);
+  // Something due in a class block ("Bio test Friday, D block") shows in that block's row: it happens then,
+  // it isn't work to do then. Anything else due that day (no block, or the block doesn't meet) is listed separately.
+  const dueAll = st.tasks.filter((x) => x.status === 'open' && x.deadline && x.deadline.date === date);
+  const dueOther = [];
+  for (const task of dueAll) {
+    const dl = task.deadline;
+    const tm = dl.block && dl.time ? D.parseHM(dl.time) : null;
+    const inRow = (sl) => tm !== null && sl.s <= tm && tm < sl.e;
+    const row = tm === null ? null
+      : slots.find((sl) => (sl.block || sl.letter) === dl.block && inRow(sl))
+        || slots.find((sl) => sl.cls && inRow(sl)) || slots.find((sl) => sl.name !== 'Study hours' && inRow(sl));
+    if (row) (row.due ||= []).push(task); else dueOther.push(task);
+  }
   const notes = [];
   if (unsetNote) notes.push(unsetNote);
   if (school.noClasses) notes.push('No classes this day.');
   if (!ds.studyStart) notes.push(ds.noStudy ? 'Busy that evening.' : 'No study hours.');
   if (!slots.some((x) => !x.cls && !x.kept && !x.unset) && !notes.length) notes.push('No free time.');
-  return { slots, notes };
+  return { slots, notes, dueOther };
 }
 const joinNodes = (nodes) => nodes.flatMap((n, i) => (i ? [', ', n] : [n]));
 
