@@ -14,6 +14,17 @@ export function mergeIntervals(list) {
   return out;
 }
 
+/** Join touching or overlapping intervals that belong to the same group (a block and its x block). */
+function mergeSameGroup(list) {
+  const out = [];
+  for (const iv of [...list].sort((a, b) => a.start - b.start)) {
+    const last = out[out.length - 1];
+    if (last && last.group === iv.group && iv.start <= last.end) last.end = Math.max(last.end, iv.end);
+    else out.push({ ...iv });
+  }
+  return out;
+}
+
 /** windows − busy (both lists of intervals). */
 export function subtractIntervals(windows, busy) {
   let result = mergeIntervals(windows);
@@ -58,17 +69,24 @@ export function computeFreeSlots({ date, today, nowMin, studyStart, studyStop, b
   if (errors.length) return { ok: false, errors, warnings, slots: [], busy: busyMerged, totalFree: 0, stop: e, start: s };
 
   const windows = noStudy ? [] : [{ start: s, end: e }];
+  const singles = []; // school free blocks: one subject each
   const cap = noStudy ? 1440 : e;
   for (const f of freeExtra) {
     if (f.start >= cap) { warnings.push(`Free block “${f.block.label || 'Free time'}” starts after study hours end, so it isn't used.`); continue; }
     if (f.end > cap) warnings.push(`Free block “${f.block.label || 'Free time'}” runs past the end of study hours; only the part before is used.`);
-    windows.push({ start: f.start, end: Math.min(f.end, cap) });
+    const w = { start: f.start, end: Math.min(f.end, cap) };
+    if (f.block.school) singles.push({ ...w, group: f.block.letter || f.block.label }); else windows.push(w);
   }
-  let slots = subtractIntervals(windows, busyMerged);
+  // A school free block (with a touching x block of the same letter, e.g. D + Dx) holds one subject.
+  // Study hours and added free time can hold several subjects, one after another.
+  const singleSlots = mergeSameGroup(singles)
+    .flatMap((w) => subtractIntervals([w], busyMerged).map((iv) => ({ ...iv, single: true, group: w.group })));
+  const otherSlots = subtractIntervals(windows, [...busyMerged, ...singles]); // a school block wins any overlap
+  let slots = [...singleSlots, ...otherSlots].sort((a, b) => a.start - b.start);
   let floor = null;
   if (date === today) {
     floor = roundUpTo(nowMin, 5);
-    slots = slots.map((iv) => ({ start: Math.max(iv.start, floor), end: iv.end })).filter((iv) => iv.end > iv.start);
+    slots = slots.map((iv) => ({ ...iv, start: Math.max(iv.start, floor) })).filter((iv) => iv.end > iv.start);
     if (!noStudy && nowMin >= e) warnings.push('Study hours are over for today.');
   }
   const totalFree = slots.reduce((sum, iv) => sum + iv.end - iv.start, 0);
@@ -96,10 +114,14 @@ export function chunkSize(R, target, S, A, MIN = MIN_SESSION) {
   return c;
 }
 
-/** Places sessions earliest-first into free intervals, reserving a short break after each one. */
+/**
+ * Places sessions earliest-first into free intervals, reserving a short break after each one.
+ * A school free block (`single`) belongs to the first task placed in it: no second subject, and that task
+ * may use the whole block instead of stopping at the usual session length.
+ */
 export class Placer {
   constructor(slots, { maxSessions = 60 } = {}) {
-    this.free = slots.map((s) => ({ start: s.start, end: s.end }));
+    this.free = slots.map((s) => ({ start: s.start, end: s.end, single: !!s.single, owner: null }));
     this.sessions = [];
     this.maxSessions = maxSessions;
   }
@@ -110,10 +132,12 @@ export class Placer {
     for (const iv of this.free) {
       if (iv.end <= iv.start) continue;
       if (cutoff != null && iv.start >= cutoff) break; // later intervals are past the deadline too
+      if (iv.single && iv.owner != null && iv.owner !== taskId) continue; // one subject per free block
       const end = cutoff != null ? Math.min(iv.end, cutoff) : iv.end;
-      const c = chunkSize(remaining, target, sessionLen, end - iv.start);
+      const c = chunkSize(remaining, target, iv.single ? Infinity : sessionLen, end - iv.start);
       if (c <= 0) continue;
       const start = iv.start, stop = start + c;
+      if (iv.single) iv.owner = taskId;
       this.sessions.push({ type: 'session', taskId, start, end: stop, minutes: c, purpose });
       iv.start = Math.min(stop + breakAfter(c), iv.end);
       return c;

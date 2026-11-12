@@ -10,8 +10,11 @@ export const BLOCK_CATEGORIES = ['activity', 'class', 'meal', 'rest', 'other'];
 /** Suggested starting estimates when the student gives none. Always labeled as suggestions. */
 export const SUGGESTED_MINUTES = { assignment: 30, project: 60, test: 45 };
 
-/** Shortest useful work session. Shorter pieces are only scheduled if they finish a task. */
-export const MIN_SESSION = 15;
+/**
+ * Shortest useful work session (Dr. Barber, Nov 2026: shorter pieces break study flow; tasks entered far ahead
+ * were being spread into 15-minute slivers). Shorter pieces are only scheduled if they finish a task.
+ */
+export const MIN_SESSION = 25;
 /** Extra share planned for uncertain estimates. Off (0) in the simplified pilot: students correct estimates via Done instead. */
 export const BUFFER_RATE = 0;
 /** A task with at least this many planned minutes counts as "substantial". */
@@ -21,7 +24,7 @@ export const AT_RISK_PACE = 30;
 /** Undated tasks are treated as if spread over this many days when ranking. */
 export const UNDATED_HORIZON_DAYS = 14;
 export const PRIORITY_WEIGHT = { high: 1.5, normal: 1, low: 0.6 };
-export const SESSION_CHOICES = [20, 25, 30, 45, 60];
+export const SESSION_CHOICES = [25, 30, 45, 60];
 
 export const DEFAULT_SETTINGS = Object.freeze({
   studyStart: '19:30',
@@ -32,10 +35,10 @@ export const DEFAULT_SETTINGS = Object.freeze({
 /** Break after a session: 5 min after sessions up to 30 min, 10 min after longer ones. */
 export const breakAfter = (sessionLen) => (sessionLen > 30 ? 10 : 5);
 
-/** Low energy shortens sessions (same priorities): 25→15, 30→20, 45/60→20, 20→15. */
+/** Session length used in study hours. Low energy shortens it by 10 (same priorities), never below the minimum. */
 export function effectiveSessionLength(sessionMin, energy) {
-  if (energy !== 'low') return sessionMin;
-  return Math.max(MIN_SESSION, Math.min(20, sessionMin - 10));
+  const len = Math.max(MIN_SESSION, sessionMin || MIN_SESSION); // older saves may say 20
+  return energy === 'low' ? Math.max(MIN_SESSION, len - 10) : len;
 }
 
 export function bufferMinutes(task) {

@@ -388,7 +388,7 @@ export function buildPlan(state, { date, now, ahead = 'all' }) {
     generatedAtMin: date === today ? nowMin : null,
     fingerprint: planFingerprint(state, date),
     studyStart: ds.studyStart, studyStop: ds.studyStop, stopMin: free.stop ?? null,
-    sessionLen, energy: ds.energy,
+    sessionLen, baseSessionLen: effectiveSessionLength(ds.sessionMin), energy: ds.energy,
     errors: free.errors, warnings,
     freeSlots: free.slots, freeTotal: free.totalFree, floor: free.floor,
     items, tasks, notFit,
@@ -448,7 +448,7 @@ export function explainSession(plan, state, item) {
   }
   if (item.purpose === 'share') lines.push(`Today's share: ${formatDuration(info.share)} of ${formatDuration(info.planned)}, spread over ${info.daysLeft} days.`);
   if (item.purpose === 'ahead') lines.push('Optional: nothing more urgent fits here, so this gets you ahead.');
-  if (plan.energy === 'low') lines.push(`Energy is low, so sessions are shorter (${plan.sessionLen} min). The order of priorities doesn't change.`);
+  if (plan.energy === 'low' && plan.sessionLen < plan.baseSessionLen) lines.push(`Energy is low, so sessions are shorter (${plan.sessionLen} min). The order of priorities doesn't change.`);
   const extra = info.reasons.slice(1).filter((r) => /High priority|Low priority|uncertain|suggested/.test(r));
   return [...lines, ...extra];
 }
