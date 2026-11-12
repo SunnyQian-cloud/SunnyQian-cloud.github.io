@@ -487,13 +487,31 @@ body.intro-on { padding-bottom: 24px; }
 /* free-block grid (Mon–Fri, like the printed schedule) */
 .fgrid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; margin: 8px 0 12px; }
 .fgrid-day { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.fgrid-head { text-align: center; font-size: 0.8rem; font-weight: 700; color: var(--ink-2); padding-bottom: 2px; }
-.fgrid-cell { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0; min-height: 44px; padding: 3px 2px;
+.fgrid-head { text-align: center; font-size: 0.9rem; font-weight: 700; color: var(--ink-2); padding-bottom: 2px; }
+.fgrid-cell { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; min-height: 48px; padding: 8px 2px 4px;
   border-radius: 8px; border: 1px solid var(--line-strong); background: transparent; color: var(--ink-2); font: inherit; cursor: pointer; min-width: 0; }
-.fgrid-cell.is-x, .fgrid-cell.is-extra { min-height: 36px; border-style: dashed; }
-.fgrid-code { font-weight: 700; font-size: 0.86rem; line-height: 1.1; max-width: 100%; overflow-wrap: anywhere; }
-.fgrid-cell.is-extra .fgrid-code { font-size: 0.68rem; font-weight: 600; }
-.fgrid-time { font-size: 0.68rem; line-height: 1.1; color: var(--muted); }
+.fgrid-cell.is-x, .fgrid-cell.is-extra { min-height: 44px; border-style: dashed; }
+.fgrid-code { font-weight: 700; font-size: 1rem; line-height: 1.1; max-width: 100%; overflow-wrap: anywhere; }
+.fgrid-cell.is-extra .fgrid-code { font-size: 0.76rem; font-weight: 600; white-space: nowrap; overflow-wrap: normal; }
+.fgrid-time { font-size: 0.76rem; line-height: 1.1; color: var(--muted); }
+/* ✓ on free periods, so selection never depends on color alone */
+.fgrid-check { position: absolute; top: 2px; right: 3px; font-size: 0.72rem; font-weight: 800; line-height: 1; color: var(--ink); }
+.grid-fold { margin: 6px 0 4px; }
+.grid-fold > summary { cursor: pointer; min-height: 44px; padding: 6px 0; list-style-position: outside; margin-left: 1.1em; }
+.grid-fold > summary .fold-title { font-weight: 600; }
+.grid-fold > summary:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 6px; }
+.grid-fold[open] > summary { margin-bottom: 2px; }
+/* Save stays on screen while scrolling through the grid (above the bottom bar on phones) */
+.setup .setup-save-row { position: sticky; bottom: calc(var(--nav-h) + env(safe-area-inset-bottom)); z-index: 2;
+  margin: 12px -16px 0; padding: 10px 16px; background: var(--surface); border-top: 1px solid var(--line); }
+@media (min-width: 900px) { .setup .setup-save-row { bottom: 0; } }
+/* Small phones (320px): a little less padding so "Senate" and "Comm." fit whole */
+@media (max-width: 359px) {
+  .setup { padding: 12px 10px; }
+  .setup .setup-save-row { margin-inline: -10px; padding-inline: 10px; }
+  .fgrid { gap: 3px; }
+  .fgrid-cell.is-extra .fgrid-code { font-size: 0.68rem; }
+}
 .fgrid-cell.is-free { background: var(--accent-soft); border: 2px solid var(--accent); color: var(--ink); }
 .fgrid-cell.is-free .fgrid-time { color: var(--ink-2); }
 .fgrid-cell:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
@@ -509,7 +527,8 @@ body.intro-on { padding-bottom: 24px; }
 
 /* Week: one day at a time on phones (day buttons + ‹ ›); the whole week on a computer */
 .week-summary { margin: 2px 0 8px; font-weight: 600; color: var(--warn-ink); }
-.week-pager { display: flex; align-items: stretch; gap: 4px; margin: 4px 0 12px; }
+.week-pager { display: flex; align-items: stretch; gap: 4px; margin: 4px -16px 12px; padding: 6px 16px;
+  position: sticky; top: var(--head-h, 58px); z-index: 10; background: var(--bg); }
 .week-strip { flex: 1; display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 4px; }
 .ws-day { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 52px; padding: 4px 0;
   border-radius: 10px; border: 1px solid var(--line-strong); background: transparent; color: var(--ink-2); font: inherit; cursor: pointer; }

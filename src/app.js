@@ -470,7 +470,7 @@ function openHowTo() {
       h('li', {}, h('strong', {}, 'Today'), ' shows what to do now and the rest of your day, block by block.'),
       h('li', {}, h('strong', {}, 'Done'), ' — say whether you finished or about how much is left. ', h('strong', {}, 'Not now'), ' moves it off today; the plan rearranges.'),
       h('li', {}, h('strong', {}, 'Week'), ' shows your free blocks and study hours for the next days. Tap a free block to keep it free.'),
-      h('li', {}, 'Tap any task name to change it, finish it or delete it. ⋯ → All tasks lists everything.')),
+      h('li', {}, 'Tap any task name to change it, finish it or delete it. ', h('strong', {}, 'Tasks'), ' lists everything.')),
     dismissed ? button('Show the list on Today again', () => { closeSheet(); commit((s) => { delete s.prefs.checklistDismissed; }); }, 'btn-secondary btn-small') : null,
   ]);
 }
@@ -498,7 +498,22 @@ function freeLettersIn(free, meetings) {
   return out;
 }
 const gridTime = (hm) => { const [h0, m] = hm.split(':').map(Number); return `${((h0 + 11) % 12) + 1}:${String(m).padStart(2, '0')}`; };
-/** Mon–Fri columns of periods in time order. Tap a period to mark it free (or not) that day. */
+/** True when some weekday periods differ from the free letters (an exception, or Senate/Meet/Community marked). */
+function hasExceptions(free, meetings) {
+  const fromLetters = new Set([...free].flatMap(letterKeys));
+  return fromLetters.size !== meetings.size || [...meetings].some((k) => !fromLetters.has(k));
+}
+const isWide = () => { try { return window.matchMedia('(min-width: 900px)').matches; } catch { return false; } };
+/** The per-day grid, folded on a phone (most students only tap letters); open on a computer or when there are exceptions. */
+function gridFold(open, onToggle, keyPrefix, grid) {
+  return h('details', { class: 'grid-fold', open, ontoggle: (e) => onToggle(e.target.open) },
+    h('summary', { 'data-key': `${keyPrefix}-fold` },
+      h('span', { class: 'fold-title' }, 'Check each day'),
+      h('span', { class: 'hint block' }, 'Optional. For blocks that aren\'t free every day, plus Senate, Meet and Community time.')),
+    h('p', { class: 'hint' }, '✓ means free. Changes here repeat every week. To change one date only, tap that day on Week.'),
+    grid);
+}
+/** Mon–Fri columns of periods in time order. Tap a period to mark it free (or not) on that weekday, every week. */
 function freeGrid(meetings, onToggle, keyPrefix) {
   return h('div', { class: 'fgrid', role: 'group', 'aria-label': 'Free periods, Monday to Friday' },
     ...GRID_DAYS.map((wd) => h('div', { class: 'fgrid-day', role: 'group', 'aria-label': DAY_LONG[wd] },
@@ -515,7 +530,8 @@ function freeGrid(meetings, onToggle, keyPrefix) {
           ? [h('span', { class: 'fgrid-code', 'aria-hidden': 'true' }, 'Comm.'), h('span', { class: 'visually-hidden' }, 'Community time')]
           : h('span', { class: 'fgrid-code' }, p.extra ? p.label : p.code),
         p.extra ? null : h('span', { class: 'visually-hidden' }, ' block'),
-        h('span', { class: 'fgrid-time' }, ` ${gridTime(p.start)}`));
+        h('span', { class: 'fgrid-time' }, ` ${gridTime(p.start)}`),
+        on ? h('span', { class: 'fgrid-check', 'aria-hidden': 'true' }, '✓') : null);
       }))));
 }
 
@@ -562,12 +578,11 @@ function setupCard() {
     h('p', { class: 'setup-summary' }, d.wk === 'NONE' ? `Saturday, ${thisSatShort()}: no classes ` : `Week: ${saturdayLetters(d.wk)} on Saturday (${d.wk} week) `,
       button('Change', () => go2(1), 'btn-link btn-small', { 'aria-label': 'Change the week' })),
     d.wk === 'NONE' ? h('p', { class: 'hint' }, 'Saturdays stay class-free. If a later Saturday has classes, tap it on Week.') : null,
-    h('p', { class: 'hint' }, 'Tap each letter where you usually have no class.'),
+    h('p', { class: 'hint' }, 'Tap your usual free blocks, then check each day for exceptions.'),
     letters,
-    h('p', { class: 'setup-q' }, 'Check each day', h('span', { class: 'hint block' }, 'Some blocks aren\'t free every day (an ensemble, a lab). Tap a period to change just that day. Senate, Meet and Community time are here too.')),
-    grid,
+    gridFold(d.gridOpen ?? (isWide() || hasExceptions(free, meetings)), (open) => { d.gridOpen = open; }, 'setup-grid', grid),
     keepRow,
-    h('div', { class: 'actions' },
+    h('div', { class: 'actions setup-save-row' },
       button('Back', () => go2(1), 'btn-ghost'),
       button('Save schedule', () => {
         const wk = d.wk;
@@ -1084,8 +1099,8 @@ function renderWeek(week) {
   if (!week) { put(root, h('p', { class: 'alert alert-danger' }, 'Something went wrong making your plan. Your tasks are safe.')); return; }
   if (!app.state.settings.school) {
     put(root, h('section', { class: 'callout-card', 'aria-label': 'Set up your free blocks' },
-      h('p', { class: 'callout-title' }, 'Which of these blocks are free for you?'),
-      h('p', { class: 'small' }, 'Here\'s the Middlesex timetable. Mark your free blocks and Blockwise will plan work in them. Until then, it only uses study hours.'),
+      h('p', { class: 'callout-title' }, 'Add your free blocks'),
+      h('p', { class: 'small' }, 'Your plan uses study hours only for now.'),
       h('div', { class: 'actions' }, button('Set up free blocks', openSchoolSetup, 'btn-primary btn-small', { 'data-key': 'week-setup' }))));
   }
   const open = app.state.tasks.filter((x) => x.status === 'open');
@@ -1099,7 +1114,17 @@ function renderWeek(week) {
   if (dueThisWeek || wontFit) {
     put(root, h('p', { class: 'week-summary' }, [dueThisWeek ? `${dueThisWeek} due this week` : null, wontFit ? `${wontFit} won't fit` : null].filter(Boolean).join(' · ')));
   }
-  const pick = (i) => { app.weekSel = i; render(); };
+  // Switching day: if the page is scrolled down, bring the new day's heading up under the (sticky) day buttons
+  const pick = (i) => {
+    app.weekSel = i;
+    render();
+    const card = $('#view-week .week-list .day-card.is-selected');
+    const pager = $('#view-week .week-pager');
+    if (!card || !pager) return;
+    const under = pager.getBoundingClientRect().bottom + 8;
+    const top = card.getBoundingClientRect().top;
+    if (top < under) window.scrollBy(0, top - under);
+  };
   const dueOn = (date) => open.some((x) => x.deadline && x.deadline.date === date);
   put(root, h('div', { class: 'week-pager' },
     button('‹', () => pick(sel - 1), 'ws-arrow', { 'aria-label': 'Previous day', disabled: sel === 0, 'data-key': 'ws-prev' }),
@@ -1637,12 +1662,9 @@ function openSchoolSetup() {
     } },
     h('fieldset', { class: 'field' },
       h('legend', {}, '1. What are your free blocks?'),
-      h('p', { class: 'hint' }, 'Tap each letter where you usually have no class.'),
+      h('p', { class: 'hint' }, 'Tap your usual free blocks, then check each day for exceptions.'),
       letterBox),
-    h('fieldset', { class: 'field' },
-      h('legend', {}, 'Check each day'),
-      h('p', { class: 'hint' }, 'Some blocks aren\'t free every day. Tap a period to change just that day. Senate, Meet and Community time are here too.'),
-      gridBox),
+    h('div', { class: 'field' }, gridFold(isWide() || hasExceptions(free, meetings), () => {}, 'school-grid', gridBox)),
     h('fieldset', { class: 'field' },
       h('legend', {}, 'Keep any free block for yourself? (optional)'),
       h('p', { class: 'hint' }, 'Tap a free block you\'d rather not use for work — lunch, a club, time off. You can also keep a block free for one day from Week.'),
@@ -2303,6 +2325,11 @@ function init() {
   $('#sheet').addEventListener('close', onSheetClosed);
   window.addEventListener('pagehide', stopVoice);
   $('#sheet').addEventListener('click', (e) => { if (e.target === $('#sheet')) closeSheet(); });
+  // The Week day buttons stick just under the header, so CSS needs the header's height
+  const head = $('.app-header');
+  const setHeadH = () => document.documentElement.style.setProperty('--head-h', `${head.offsetHeight}px`);
+  setHeadH();
+  if ('ResizeObserver' in window) new ResizeObserver(setHeadH).observe(head);
   const tick = () => {
     const t = today();
     if (t !== app.lastToday) {
