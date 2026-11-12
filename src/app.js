@@ -585,10 +585,13 @@ function setupCard() {
 
 // ---------- add: type → one tappable line → Save ----------
 let voice = null;
+/** Voice is off for the pilot (it didn't work reliably for testers). `?voice=1` turns it on to test it. */
+const VOICE_ON = (() => { try { return new URLSearchParams(window.location.search).has('voice'); } catch { return false; } })();
+
 function addBox(canClose) {
   const input = h('input', { id: 'add-input', type: 'text', maxlength: '300', autocomplete: 'off', enterkeyhint: 'done', placeholder: 'What\'s due? e.g. Bio test Tuesday, study 45 min', 'aria-label': 'What\'s due?', 'data-key': 'add-input', oninput: (e) => { app.addText = e.target.value; } });
   input.value = app.addText;
-  const voiceOk = !!getRecognitionCtor(window);
+  const voiceOk = VOICE_ON && !!getRecognitionCtor(window);
   const form = h('form', { class: 'add-form', novalidate: true, onsubmit: (e) => {
     e.preventDefault();
     const text = input.value.trim();
@@ -603,7 +606,7 @@ function addBox(canClose) {
   return h('section', { class: 'add', 'aria-label': 'Add something due' },
     form,
     app.voiceState ? voicePanel() : null,
-    !voiceOk ? h('p', { class: 'hint' }, VOICE_ERRORS.unsupported) : null,
+    VOICE_ON && !voiceOk ? h('p', { class: 'hint' }, VOICE_ERRORS.unsupported) : null,
     app.addDraft ? draftLine(app.addDraft) : null,
     !canClose && !app.addDraft ? h('p', { class: 'hint add-hint' }, 'For a test, give the study time — not how long the test lasts.') : null,
     canClose && !app.addDraft ? h('div', { class: 'add-foot' },
@@ -1075,7 +1078,8 @@ function renderWeek(week) {
     h('div', { class: 'week-title-row' }, h('h1', { id: 'week-title', tabindex: '-1' }, 'This week'),
       button('Edit schedule', openSchedule, 'btn-link btn-small head-edit', { 'data-key': 'head-edit-week' })),
     h('p', { class: 'lead' }, 'Your free blocks and study hours, filled in for you.'),
-    h('p', { class: 'hint' }, 'Updates by itself as you add, finish or change things. Tap a task to change its due date, time left or priority. Tap a day for a day off or a busy evening, or a free block to keep it free.')));
+    app.state.prefs.weekTipHidden ? null : h('p', { class: 'hint week-tip' }, 'Updates by itself. Tap any task, day or block to change it. ',
+      button('Hide', () => commit((s) => { s.prefs.weekTipHidden = true; }), 'btn-link btn-small', { 'aria-label': 'Hide this tip', 'data-key': 'week-tip-hide' }))));
   if (!week) { put(root, h('p', { class: 'alert alert-danger' }, 'Something went wrong making your plan. Your tasks are safe.')); return; }
   if (!app.state.settings.school) {
     put(root, h('section', { class: 'callout-card', 'aria-label': 'Set up your free blocks' },
@@ -1117,6 +1121,9 @@ function renderWeek(week) {
   put(root, remindersCard());
 }
 
+/** A small colored square for a block letter (decorative: the letter is always written next to it). */
+const blockDot = (code) => (code && /^[A-G]/.test(code) ? h('span', { class: `blk-dot blk-${code[0]}`, 'aria-hidden': 'true' }) : null);
+
 function slotRow(sl) {
   // What's due in this block: the task's name and a "Test"/"Due" tag, never minutes (minutes mean work time).
   const dueEls = (sl.due || []).map((task) => h('p', { class: 'slot-due' },
@@ -1125,12 +1132,12 @@ function slotRow(sl) {
   const hasDue = dueEls.length > 0;
   if (sl.unset) {
     return h('li', { class: ['slot is-class is-unset', hasDue && 'has-due'] },
-      h('div', { class: 'slot-when' }, h('span', { class: 'slot-name' }, sl.name), h('span', { class: 'slot-time' }, fmtRange(sl.s, sl.e))),
+      h('div', { class: 'slot-when' }, h('span', { class: 'slot-name' }, blockDot(sl.letter || sl.block), sl.name), h('span', { class: 'slot-time' }, fmtRange(sl.s, sl.e))),
       h('div', { class: 'slot-what' }, ...dueEls, h('span', { class: 'class-label' }, 'Not set yet')));
   }
   const nameEl = sl.letter
-    ? h('button', { type: 'button', class: 'slot-name slot-btn', onclick: () => openBlockSheet(sl.date, sl.letter), 'aria-label': `${sl.name}, ${fmtRange(sl.s, sl.e)}. ${sl.kept ? 'Kept free' : 'Free'}. Change` }, sl.name)
-    : h('span', { class: 'slot-name' }, sl.name);
+    ? h('button', { type: 'button', class: 'slot-name slot-btn', onclick: () => openBlockSheet(sl.date, sl.letter), 'aria-label': `${sl.name}, ${fmtRange(sl.s, sl.e)}. ${sl.kept ? 'Kept free' : 'Free'}. Change` }, blockDot(sl.letter), sl.name)
+    : h('span', { class: 'slot-name' }, blockDot(sl.letter || sl.block), sl.name);
   if (sl.kept) {
     return h('li', { class: ['slot is-kept', hasDue && 'has-due'] },
       h('div', { class: 'slot-when' }, nameEl, h('span', { class: 'slot-time' }, fmtRange(sl.s, sl.e))),
@@ -1138,12 +1145,12 @@ function slotRow(sl) {
   }
   if (sl.cls) {
     return h('li', { class: ['slot is-class', hasDue && 'has-due'] },
-      h('div', { class: 'slot-when' }, h('span', { class: 'slot-name' }, sl.name), h('span', { class: 'slot-time' }, fmtRange(sl.s, sl.e))),
+      h('div', { class: 'slot-when' }, h('span', { class: 'slot-name' }, blockDot(sl.letter || sl.block), sl.name), h('span', { class: 'slot-time' }, fmtRange(sl.s, sl.e))),
       h('div', { class: 'slot-what' }, ...(hasDue ? dueEls : [h('span', { class: 'class-label' }, 'Class')])));
   }
   if (sl.past) {
     return h('li', { class: ['slot', hasDue && 'has-due'] },
-      h('div', { class: 'slot-when' }, h('span', { class: 'slot-name' }, sl.name), h('span', { class: 'slot-time' }, fmtRange(sl.s, sl.e))),
+      h('div', { class: 'slot-when' }, h('span', { class: 'slot-name' }, blockDot(sl.letter || sl.block), sl.name), h('span', { class: 'slot-time' }, fmtRange(sl.s, sl.e))),
       h('div', { class: 'slot-what' }, ...dueEls, h('span', { class: 'class-label' }, 'Over')));
   }
   const free = !sl.items.length;

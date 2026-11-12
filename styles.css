@@ -497,3 +497,12 @@ body.intro-on { padding-bottom: 24px; }
 .fgrid-cell.is-free { background: var(--accent-soft); border: 2px solid var(--accent); color: var(--ink); }
 .fgrid-cell.is-free .fgrid-time { color: var(--ink-2); }
 .fgrid-cell:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+/* block colors: one per letter (decorative; the letter is always shown) */
+.blk-A { --blk: #ef6b6b; } .blk-B { --blk: #5aa9f0; } .blk-C { --blk: #5cc98a; } .blk-D { --blk: #f2a64a; }
+.blk-E { --blk: #b67be3; } .blk-F { --blk: #3fc7d4; } .blk-G { --blk: #ee6fa8; }
+.blk-dot { display: inline-block; width: 9px; height: 9px; border-radius: 3px; margin-right: 6px; vertical-align: 1px; background: var(--blk, var(--muted)); }
+.slot.is-class .blk-dot, .slot.is-past .blk-dot { opacity: 0.55; }
+.fgrid-cell[class*="blk-"] { border-top: 3px solid var(--blk); }
+.fgrid-cell.is-free[class*="blk-"] { border-color: var(--blk); background: color-mix(in srgb, var(--blk) 22%, transparent); }
+.week-tip .btn-link { margin-left: 2px; padding: 0; min-height: 24px; }
