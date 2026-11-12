@@ -476,3 +476,10 @@ body.intro-on { padding-bottom: 24px; }
   .idemo-free { animation: none; opacity: 0; }
   .idemo-session { animation: none; }
 }
+
+/* usage counts */
+.intro-usage { margin-top: 4px; font-size: 0.8rem; }
+.banner-usage p { margin: 0 0 6px; }
+.banner-usage .slim-row { justify-content: flex-start; gap: 10px; }
+.plain-list { margin: 0 0 12px; padding-left: 1.2em; }
+.plain-list li { margin: 2px 0; }

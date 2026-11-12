@@ -23,10 +23,31 @@ import {
 } from './store.js';
 import { buildDemoState, DEMO_CLOCK_MIN } from './demo.js';
 import { createVoiceController, VOICE_ERRORS, getRecognitionCtor } from './voice.js';
+import { createUsage, USAGE_KEY } from './usage.js';
 
 const DEMO_CLOCK_KEY = 'blockwise.demo.clock';
 const $ = (sel) => document.querySelector(sel);
 const store = createStore(() => window.localStorage);
+
+// ---------- usage counts (school-approved; see src/usage.js for exactly what's sent) ----------
+// The counter's public address. It only accepts step counts; it can't read anything back.
+const USAGE_ENDPOINT = 'https://script.google.com/macros/s/AKfycbyts130FLEPUrYnToNrFVjEvsylXegs-oxc0z_V2DuwJkZEMCCAfVT_LHKZMouv-X_9Kg/exec';
+const APP_VERSION = '2026.11.12';
+const usage = createUsage({
+  endpoint: USAGE_ENDPOINT, version: APP_VERSION,
+  get: (k) => store.get(k), set: (k, v) => store.set(k, v),
+  fetchFn: (...a) => window.fetch(...a),
+});
+/** Counting runs only for the student's own data, after they've been shown the note, and not if they turned it off. */
+const usageOn = () => app.mode === 'real' && !!USAGE_ENDPOINT && store.available && usage.noticeShown() && !usage.isOff();
+const usageFlags = () => ({ hasSchool: !!app.state.settings.school, hasTask: app.state.tasks.length > 0 });
+const srcParam = () => { try { return new URLSearchParams(window.location.search).get('src'); } catch { return null; } };
+let usageTimer = null;
+const usageSendSoon = () => { clearTimeout(usageTimer); usageTimer = setTimeout(() => usage.flush(), 1500); };
+function usageOpened() { if (!usageOn() || document.hidden) return; usage.opened(today(), usageFlags(), srcParam()); usageSendSoon(); }
+function usageChanged() { if (!usageOn()) return; usage.changed(today(), usageFlags()); usageSendSoon(); }
+/** What counts as "did something": tasks, the schedule, study hours (not view settings or dismissed tips). */
+const meaningful = (s) => JSON.stringify([s.tasks, s.days, s.settings, s.week]);
 
 const app = {
   mode: 'real',
@@ -92,9 +113,11 @@ function persist() {
 
 /** Apply a change, save, re-render, and optionally announce. */
 function commit(mutate, message) {
+  const before = meaningful(app.state);
   mutate(app.state);
   syncBlockDeadlines(app.state);
   persist();
+  if (meaningful(app.state) !== before) usageChanged();
   render();
   if (message) toast(message);
 }
@@ -179,6 +202,16 @@ function renderBanners() {
           : button('Dismiss', () => { app.banners.unreadable = null; renderBanners(); }, 'btn-secondary'))));
   }
   if (b.saveError) put(root, h('div', { class: 'banner banner-warn', role: 'alert' }, h('p', {}, b.saveError)));
+  // Students who started before counting (or skipped the welcome screen) see this once before anything is counted.
+  if (app.mode === 'real' && USAGE_ENDPOINT && store.available && !usage.noticeOk() && !usage.isOff() && !showIntro()) {
+    usage.markNoticeShown();
+    put(root, h('div', { class: 'banner banner-slim banner-usage', role: 'region', 'aria-label': 'Usage counts' },
+      h('p', {}, h('strong', {}, 'New: '), 'Blockwise counts basic steps, like “made a plan,” to see whether it helps. Never your tasks or name.'),
+      h('div', { class: 'slim-row' },
+        button('OK', () => { usage.markNoticeOk(); renderBanners(); }, 'btn-secondary btn-small', { 'data-key': 'usage-ok' }),
+        button('Turn off', () => { usage.setOff(true); renderBanners(); toast('Usage counts are off. Turn them back on in ⋯ → Usage counts.'); }, 'btn-ghost btn-small', { 'data-key': 'usage-off' }),
+        button('Details', openUsageSheet, 'btn-link btn-small'))));
+  }
   $('#mode-pill').hidden = app.mode !== 'demo';
 }
 
@@ -302,7 +335,10 @@ function showIntro() {
 }
 
 function introScreen() {
+  const counting = !!USAGE_ENDPOINT && store.available && !usage.isOff();
+  if (counting) usage.markNoticeShown();
   const start = () => {
+    if (counting) usage.markNoticeOk();
     commit((s) => { s.prefs.introDone = true; });
     window.scrollTo(0, 0);
     document.querySelector('[data-key="setup-title"]')?.focus({ preventScroll: true });
@@ -315,7 +351,8 @@ function introScreen() {
     h('div', { class: 'intro-actions' },
       button('Plan my next free block', start, 'btn-primary intro-go', { 'data-key': 'intro-go' }),
       button('See an example', enterDemo, 'btn-secondary', { 'data-key': 'intro-example' })),
-    h('p', { class: 'intro-fine' }, h('strong', {}, 'Spend less time planning. Know what to start next.'), h('br'), 'Free · No account · Saved only on your device'));
+    h('p', { class: 'intro-fine' }, h('strong', {}, 'Spend less time planning. Know what to start next.'), h('br'), 'Free · No account · Your plan stays on your device'),
+    counting ? h('p', { class: 'intro-fine intro-usage' }, 'Blockwise counts basic steps, like “made a plan,” to see whether it helps. Never your tasks or name. Turn off in ⋯ → Usage counts.') : null);
 }
 
 /** A tiny picture of the one idea: a test on Friday becomes study time in a free block before it. Plays once. */
@@ -1241,7 +1278,32 @@ function openMenu() {
     row('Add to your Home Screen', null, openInstallHelp, 'menu-install'),
     row('Feedback', 'Questions to answer and copy', () => openSheet('Feedback', feedbackForm()), 'menu-feedback'),
     row('Backup and data', 'Export, restore or delete', openDataSheet, 'menu-data'),
+    USAGE_ENDPOINT ? row('Usage counts', usage.isOff() ? 'Off' : 'On · basic steps only, never your tasks', openUsageSheet, 'menu-usage') : null,
     demo ? null : h('div', { class: 'menu-danger' }, row('Start over…', 'Delete everything on this phone and set up again', startOver, 'menu-reset')),
+  ]);
+}
+
+/** ⋯ → Usage counts: exactly what's sent, and the off switch. */
+function openUsageSheet() {
+  const id = uniqueId('usage');
+  const on = !usage.isOff();
+  openSheet('Usage counts', [
+    h('p', {}, 'To see whether Blockwise helps, it counts a few basic steps. Middlesex approved this for the pilot.'),
+    h('ul', { class: 'plain-list' },
+      h('li', {}, 'Opened Blockwise (once a day)'),
+      h('li', {}, 'Finished setup · made a first plan'),
+      h('li', {}, 'Did something that day (added, edited or finished a task, or changed the schedule)'),
+      h('li', {}, 'Came back in the second week after a first plan')),
+    h('p', {}, h('strong', {}, 'Never sent: '), 'your tasks, deadlines, classes, free blocks, name, or anything you type or say. Each count has a random one-time code so it isn\'t counted twice, and nothing that links your counts together.'),
+    h('p', { class: 'muted small' }, 'Counts go to a private Google Sheet only the person running the pilot can see. Like any website, Google receives your connection\'s IP address when a count is sent. The example day is never counted.'),
+    h('label', { class: 'switch-row', for: id },
+      h('input', { type: 'checkbox', role: 'switch', id, checked: on, onchange: (e) => {
+        usage.setOff(!e.target.checked);
+        if (e.target.checked) usageOpened();
+        renderBanners();
+        toast(e.target.checked ? 'Usage counts are on.' : 'Usage counts are off. Nothing more is sent.');
+      } }),
+      h('span', {}, h('strong', {}, 'Share usage counts'), h('span', { class: 'muted small block' }, 'Turn off anytime. Blockwise works the same either way.'))),
   ]);
 }
 
@@ -2029,7 +2091,7 @@ function wipeEverything(message) {
   try {
     for (let i = window.localStorage.length - 1; i >= 0; i--) {
       const k = window.localStorage.key(i);
-      if (k && (k === STORAGE_KEY || k.startsWith(UNREADABLE_PREFIX) || k === DEMO_KEY || k === MODE_KEY || k === DEMO_CLOCK_KEY)) window.localStorage.removeItem(k);
+      if (k && (k === STORAGE_KEY || k.startsWith(UNREADABLE_PREFIX) || k === DEMO_KEY || k === MODE_KEY || k === DEMO_CLOCK_KEY || k === USAGE_KEY)) window.localStorage.removeItem(k);
     }
   } catch { /* storage unavailable: nothing persisted anyway */ }
   app.state = emptyState();
@@ -2140,11 +2202,13 @@ function init() {
       return;
     }
     if (!$('#sheet').open && !$('#confirm').open && !app.voiceState) render();
+    usageOpened(); // counts a new day if the app stays open past midnight
   };
   setInterval(tick, 30_000);
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) tick(); });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) tick(); else usage.flush({ keepalive: true }); });
   window.addEventListener('storage', (e) => { if (e.key === STORAGE_KEY && app.mode === 'real' && !$('#sheet').open) { loadReal(); render(); } });
   render();
+  usageOpened();
   document.documentElement.dataset.ready = 'true';
 }
 
