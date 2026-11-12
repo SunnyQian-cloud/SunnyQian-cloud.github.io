@@ -75,7 +75,7 @@ h1:focus-visible, h2:focus-visible { outline: 3px solid var(--focus); }
 .header-actions { margin-left: auto; display: flex; gap: 4px; align-items: center; }
 .top-nav { display: none; }
 .bottom-nav {
-  position: fixed; left: 0; right: 0; bottom: 0; z-index: 20; display: grid; grid-template-columns: repeat(2, 1fr);
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 20; display: grid; grid-template-columns: repeat(3, 1fr);
   height: calc(var(--nav-h) + env(safe-area-inset-bottom)); padding-bottom: env(safe-area-inset-bottom);
   background: #181818; border-top: 1px solid var(--line);
 }
@@ -506,3 +506,27 @@ body.intro-on { padding-bottom: 24px; }
 .fgrid-cell[class*="blk-"] { border-top: 3px solid var(--blk); }
 .fgrid-cell.is-free[class*="blk-"] { border-color: var(--blk); background: color-mix(in srgb, var(--blk) 22%, transparent); }
 .week-tip .btn-link { margin-left: 2px; padding: 0; min-height: 24px; }
+
+/* Week: one day at a time on phones (day buttons + ‹ ›); the whole week on a computer */
+.week-summary { margin: 2px 0 8px; font-weight: 600; color: var(--warn-ink); }
+.week-pager { display: flex; align-items: stretch; gap: 4px; margin: 4px 0 12px; }
+.week-strip { flex: 1; display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 4px; }
+.ws-day { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 52px; padding: 4px 0;
+  border-radius: 10px; border: 1px solid var(--line-strong); background: transparent; color: var(--ink-2); font: inherit; cursor: pointer; }
+.ws-wd { font-size: 0.74rem; line-height: 1.1; }
+.ws-num { font-size: 1.02rem; font-weight: 700; line-height: 1.1; color: var(--ink); }
+.ws-day.is-selected { background: var(--primary); border-color: var(--primary); color: #fff; }
+.ws-day.is-selected .ws-num { color: #fff; }
+.ws-dot { position: absolute; top: 5px; right: 6px; width: 7px; height: 7px; border-radius: 50%; background: var(--warn-ink); }
+.ws-arrow { min-width: 34px; border-radius: 10px; border: 1px solid var(--line-strong); background: transparent; color: var(--ink); font: 700 1.2rem var(--font); cursor: pointer; }
+.ws-arrow:disabled { opacity: 0.35; cursor: default; }
+.ws-day:focus-visible, .ws-arrow:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.day-planned { margin: 2px 0 0; font-size: 0.82rem; color: var(--muted); }
+@media (max-width: 899px) { .week-list .day-card:not(.is-selected) { display: none; } }
+@media (min-width: 900px) { .week-pager { display: none; } }
+/* Tasks: one ordered list on phones; Assignments & projects | Tests side by side on a computer */
+.tasks-split { display: none; }
+@media (min-width: 900px) {
+  .tasks-all { display: none; }
+  .tasks-split { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; align-items: start; }
+}

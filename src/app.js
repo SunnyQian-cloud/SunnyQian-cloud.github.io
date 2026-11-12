@@ -249,7 +249,7 @@ function render() {
   let week = null;
   syncBlockDeadlines(app.state);
   try { week = buildWeek(app.state, { now: now() }); } catch (e) { console.error(e); }
-  if (app.view === 'week') renderWeek(week); else renderToday(week);
+  if (app.view === 'week') renderWeek(week); else if (app.view === 'tasks') renderTasks(week); else renderToday(week);
   if (key || index >= 0) {
     const el = (key && main.querySelector(`[data-key="${CSS.escape(key)}"]`)) || main.querySelectorAll(FOCUSABLE)[index];
     if (el && !$('#sheet').open && !$('#confirm').open) el.focus({ preventScroll: true });
@@ -263,6 +263,7 @@ function renderNav() {
   }
   $('#view-today').hidden = app.view !== 'today';
   $('#view-week').hidden = app.view !== 'week';
+  $('#view-tasks').hidden = app.view !== 'tasks';
 }
 
 function go(view, { focus = true } = {}) {
@@ -1089,28 +1090,54 @@ function renderWeek(week) {
   }
   const open = app.state.tasks.filter((x) => x.status === 'open');
   const name = (x) => taskLink(x, x.deadline && x.deadline.block ? h('span', { class: 'muted small' }, ` · ${x.deadline.block} block`) : null);
+  // On a phone, one day at a time: a row of day buttons with ‹ ›. On a computer, the whole week (the row is hidden).
+  const days = week.days.slice(1); // tomorrow … six days out (today is on Today)
+  const sel = Math.min(Math.max(app.weekSel || 0, 0), days.length - 1);
+  const end = D.addDays(t, week.days.length - 1);
+  const dueThisWeek = open.filter((x) => x.deadline && x.deadline.date > t && x.deadline.date <= end).length;
+  const wontFit = new Set(week.shortfalls.map((f) => f.taskId)).size;
+  if (dueThisWeek || wontFit) {
+    put(root, h('p', { class: 'week-summary' }, [dueThisWeek ? `${dueThisWeek} due this week` : null, wontFit ? `${wontFit} won't fit` : null].filter(Boolean).join(' · ')));
+  }
+  const pick = (i) => { app.weekSel = i; render(); };
+  const dueOn = (date) => open.some((x) => x.deadline && x.deadline.date === date);
+  put(root, h('div', { class: 'week-pager' },
+    button('‹', () => pick(sel - 1), 'ws-arrow', { 'aria-label': 'Previous day', disabled: sel === 0, 'data-key': 'ws-prev' }),
+    h('div', { class: 'week-strip', role: 'group', 'aria-label': 'Days' }, ...days.map((plan, i) => {
+      const date = plan.date;
+      const wd = D.weekdayName(date, true);
+      const due = dueOn(date);
+      // Shows "Mon / 16"; screen readers hear "Mon 16" (plus "Tomorrow" and "something due" where they apply)
+      return h('button', { type: 'button', class: ['ws-day', i === sel && 'is-selected'], 'aria-pressed': String(i === sel), 'data-key': `ws-${i}`, onclick: () => pick(i) },
+        i === 0 ? h('span', { class: 'visually-hidden' }, 'Tomorrow, ') : null,
+        h('span', { class: 'ws-wd' }, wd.slice(0, 3)),
+        h('span', { class: 'ws-num' }, String(Number(date.slice(8))), due ? h('span', { class: 'visually-hidden' }, ', something due') : null),
+        due ? h('span', { class: 'ws-dot', 'aria-hidden': 'true' }) : null);
+    })),
+    button('›', () => pick(sel + 1), 'ws-arrow', { 'aria-label': 'Next day', disabled: sel === days.length - 1, 'data-key': 'ws-next' })));
   const list = h('ol', { class: 'week-list' });
   for (let i = 1; i < week.days.length; i++) {
     const plan = week.days[i];
     const date = plan.date;
+    const plannedMin = plan.items.filter((it) => it.type === 'session').reduce((m, it) => m + it.minutes, 0);
     const short = week.shortfalls.filter((f) => f.date === date).map((f) => ({ f, task: taskById(f.taskId) })).filter((x) => x.task);
     const info = daySlots(plan, date);
     const due = info.dueOther; // due in a class block → shown in that block's row instead
     const wt = D.weekdayOf(date) === 6 ? weekTypeFor(app.state, date) : null;
-    list.append(h('li', { class: 'day-card' },
+    list.append(h('li', { class: ['day-card', i - 1 === sel && 'is-selected'] },
       h('div', { class: 'day-top' },
         h('button', { type: 'button', class: 'day-name', onclick: () => openDaySheet(date) },
           i === 1 ? 'Tomorrow' : D.weekdayName(date, true), ' ',
           h('span', { class: 'day-date' }, i === 1 ? D.formatDate(date, t) : D.formatDate(date, t).replace(/^\w+, /, '')),
           h('span', { class: 'visually-hidden' }, ' – change this day')),
         wt ? h('span', { class: 'chip' }, `${wt} week`) : null),
+      h('p', { class: 'day-planned' }, plannedMin ? `${fmtDur(plannedMin)} of study planned` : 'No study planned'),
       due.length ? h('p', { class: 'day-due' }, 'Due: ', ...joinNodes(due.map(name))) : null,
       info.slots.length ? h('ul', { class: 'slots' }, ...info.slots.map(slotRow)) : null,
       ...info.notes.map((n) => h('p', { class: 'day-note' }, n)),
       ...short.map(({ f, task }) => h('p', { class: 'day-warn' }, `About ${fmtDur(f.minutes)} of “${task.title}” won't fit before it's due.`))));
   }
   put(root, list);
-  const end = D.addDays(t, week.days.length - 1);
   const later = open.filter((x) => x.deadline && x.deadline.date > end).sort((a, b) => a.deadline.date.localeCompare(b.deadline.date));
   const undated = open.filter((x) => !x.deadline);
   if (later.length || undated.length) {
@@ -1319,9 +1346,7 @@ function openMenu() {
   const st = app.state;
   const demo = app.mode === 'demo';
   const row = (label, sub, onclick, key) => h('button', { type: 'button', class: 'menu-row', onclick, 'data-key': key }, h('span', { class: 'choice-title' }, label), sub ? h('span', { class: 'choice-sub' }, sub) : null);
-  const openCount = st.tasks.filter((x) => x.status === 'open').length;
   openSheet('Menu', [
-    row('All tasks', openCount ? `${openCount} open · change, finish or delete` : 'Change, finish or delete', () => openAllTasks(), 'menu-all'),
     h('h3', { class: 'small-heading' }, 'Help'),
     row('How to use Blockwise', 'The four steps, and what the buttons do', openHowTo, 'menu-howto'),
     row('How Blockwise decides', null, () => openSheet('How Blockwise decides', rulesExplainer()), 'menu-rules'),
@@ -1410,19 +1435,50 @@ function addFreeTime(date, label, start, end) {
 }
 
 /** Every task in one place: tap to change, finish or delete. */
-function openAllTasks() {
+/**
+ * Tasks tab: everything added, in the order to work on it (by each task's next planned session; then what isn't
+ * planned yet, by due date). On a wide screen: Assignments & projects | Tests, side by side, each in that order.
+ */
+function renderTasks(week) {
+  const root = clear($('#view-tasks'));
   const t = today();
-  const key = (x) => (x.deadline ? `${x.deadline.date} ${String(x.deadline.time ? D.parseHM(x.deadline.time) : 0).padStart(4, '0')}` : '9999');
-  const open = app.state.tasks.filter((x) => x.status === 'open').sort((a, b) => key(a).localeCompare(key(b)) || a.title.localeCompare(b.title));
+  put(root, h('div', { class: 'week-head' },
+    h('h1', { id: 'tasks-title', tabindex: '-1' }, 'Tasks'),
+    h('p', { class: 'lead' }, 'Everything you\'ve added, in the order to work on it.'),
+    h('p', { class: 'hint' }, 'Tap a task to change its due date, time left or priority, finish it, or delete it.')));
+  const next = new Map(); // taskId → first planned session { date, start }
+  for (const plan of (week ? week.days : [])) {
+    for (const it of plan.items) if (it.type === 'session' && !next.has(it.taskId)) next.set(it.taskId, { date: plan.date, start: it.start });
+  }
+  const dueKey = (x) => (x.deadline ? `${x.deadline.date} ${String(x.deadline.time ? D.parseHM(x.deadline.time) : 0).padStart(4, '0')}` : '9999');
+  const order = (a, b) => {
+    const na = next.get(a.id), nb = next.get(b.id);
+    if (na && nb) return na.date.localeCompare(nb.date) || na.start - nb.start;
+    if (na || nb) return na ? -1 : 1;
+    return dueKey(a).localeCompare(dueKey(b)) || a.title.localeCompare(b.title);
+  };
+  const open = app.state.tasks.filter((x) => x.status === 'open').sort(order);
   const done = app.state.tasks.filter((x) => x.status === 'done').sort((a, b) => String(b.completedAt || '').localeCompare(String(a.completedAt || ''))).slice(0, 30);
-  const row = (x) => h('li', {}, h('button', { type: 'button', class: 'task-row', onclick: () => openEditTask(x.id) },
+  const nextLabel = (x) => {
+    const n = next.get(x.id);
+    if (!n) return 'Not planned yet';
+    return `Next: ${n.date === t ? 'today' : D.formatDate(n.date, t)} ${fmtT(n.start)}`;
+  };
+  const row = (x, keyPrefix) => h('li', {}, h('button', { type: 'button', class: 'task-row', 'data-key': `${keyPrefix}-${x.id}`, onclick: () => openEditTask(x.id) },
     h('span', { class: 'task-row-title' }, x.title, x.kind === 'test' ? h('span', { class: 'tag-test' }, 'test') : null),
-    h('span', { class: 'task-row-meta' }, x.status === 'done' ? 'Finished · tap to reopen or delete' : `${dueLabel(x, t)} · ${remainingLabel(x)}`)));
-  openSheet('All tasks', [
-    open.length ? h('ul', { class: 'task-list', 'aria-label': 'Open tasks' }, ...open.map(row)) : h('p', { class: 'muted' }, 'Nothing to do yet. Add something with + Add.'),
-    open.length ? h('p', { class: 'hint' }, 'Tap a task to change it, mark it done, or delete it.') : null,
-    done.length ? h('details', { class: 'disclosure-plain' }, h('summary', {}, `Finished (${done.length})`), h('ul', { class: 'task-list', 'aria-label': 'Finished tasks' }, ...done.map(row))) : null,
-  ]);
+    h('span', { class: 'task-row-meta' }, x.status === 'done' ? 'Finished · tap to reopen or delete' : `${dueLabel(x, t)} · ${remainingLabel(x)} · ${nextLabel(x)}`)));
+  if (!open.length) put(root, h('p', { class: 'empty-hint' }, 'Nothing to do yet. Add something with + Add task.'));
+  else {
+    // One list in "do next" order (phones); two columns by type (wide screens)
+    put(root, h('ol', { class: 'task-list tasks-all', 'aria-label': 'Open tasks, in order' }, ...open.map((x) => row(x, 'task'))));
+    const tests = open.filter((x) => x.kind === 'test'), work = open.filter((x) => x.kind !== 'test');
+    put(root, h('div', { class: 'tasks-split' },
+      h('section', { 'aria-labelledby': 'tasks-work' }, h('h2', { id: 'tasks-work', class: 'small-heading' }, `Assignments & projects (${work.length})`),
+        work.length ? h('ol', { class: 'task-list' }, ...work.map((x) => row(x, 'taskw'))) : h('p', { class: 'muted small' }, 'None.')),
+      h('section', { 'aria-labelledby': 'tasks-tests' }, h('h2', { id: 'tasks-tests', class: 'small-heading' }, `Tests (${tests.length})`),
+        tests.length ? h('ol', { class: 'task-list' }, ...tests.map((x) => row(x, 'taskt'))) : h('p', { class: 'muted small' }, 'None.'))));
+  }
+  if (done.length) put(root, h('details', { class: 'disclosure-plain' }, h('summary', {}, `Finished (${done.length})`), h('ul', { class: 'task-list', 'aria-label': 'Finished tasks' }, ...done.map((x) => row(x, 'taskd')))));
 }
 
 // ---------- Home Screen ----------

@@ -28,6 +28,7 @@
     <nav class="top-nav" aria-label="Main">
       <button type="button" class="nav-btn" data-view="today">Today</button>
       <button type="button" class="nav-btn" data-view="week">Week</button>
+      <button type="button" class="nav-btn" data-view="tasks">Tasks</button>
     </nav>
     <div class="header-actions">
       <button type="button" id="schedule-btn" class="btn btn-ghost btn-schedule">Edit schedule</button>
@@ -44,6 +45,7 @@
     <noscript><p class="card">Blockwise needs JavaScript turned on.</p></noscript>
     <section id="view-today" class="view" aria-labelledby="today-title"></section>
     <section id="view-week" class="view" aria-labelledby="week-title" hidden></section>
+    <section id="view-tasks" class="view" aria-labelledby="tasks-title" hidden></section>
   </main>
 
   <nav class="bottom-nav" aria-label="Main">
@@ -54,6 +56,10 @@
     <button type="button" class="nav-btn" data-view="week">
       <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15" rx="2"/><path d="M3.5 10h17M8 3v4M16 3v4"/></svg>
       <span>Week</span>
+    </button>
+    <button type="button" class="nav-btn" data-view="tasks">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6h11M9 12h11M9 18h11"/><path d="m3.5 6 1.2 1.2L7 5M3.5 12l1.2 1.2L7 11M3.5 18l1.2 1.2L7 17"/></svg>
+      <span>Tasks</span>
     </button>
   </nav>
 
