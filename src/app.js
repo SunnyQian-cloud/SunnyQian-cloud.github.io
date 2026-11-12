@@ -10,7 +10,7 @@ import {
 import { parseTaskText, parseBulk, validateDraft, draftToTask, makeDeadline } from './parse.js';
 import {
   buildPlan, buildWeek, nextSession, explainSession, daySettings, earliestStudyFn,
-  blocksForDate, schoolBlocksForDate, classPeriodsForDate, weekTypeFor, mondayOf,
+  blocksForDate, schoolBlocksForDate, classPeriodsForDate, weekTypeFor, mondayOf, gridPeriods, freeMeetingKeys,
   blockStartOn, classBlocksOn, syncBlockDeadlines, timetableForDate,
 } from './plan.js';
 import { MIDDLESEX } from './schools/middlesex.js';
@@ -478,12 +478,54 @@ function openHowTo() {
  * First-run setup, one question at a time: Step 1 the week (answered with Saturday's blocks), Step 2 free blocks.
  * Progress lives in app.setupDraft (memory only), so the 30-second refresh never wipes a half-finished setup.
  */
+// ---------- the free-block grid (Mon–Fri, like the printed schedule) ----------
+const GRID_DAYS = [1, 2, 3, 4, 5];
+const DAY_LONG = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const DAY_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+/** Every Mon–Fri period of a letter: its block and its x block. */
+const letterKeys = (L) => GRID_DAYS.flatMap((wd) => gridPeriods(MIDDLESEX, wd).filter((p) => !p.extra && p.code[0] === L).map((p) => `${wd}:${p.code}`));
+/** Tapping a letter turns all its weekday periods on or off (Saturday uses the letters directly). */
+function toggleLetter(free, meetings, L) {
+  const on = !free.has(L);
+  if (on) free.add(L); else free.delete(L);
+  for (const k of letterKeys(L)) { if (on) meetings.add(k); else meetings.delete(k); }
+}
+/** Letters free somewhere: a free letter, or that block (not just its x block) free on at least one weekday. */
+function freeLettersIn(free, meetings) {
+  const out = new Set(free);
+  for (const k of meetings) { const code = k.split(':')[1]; if (/^[A-G]$/.test(code)) out.add(code); }
+  return out;
+}
+const gridTime = (hm) => { const [h0, m] = hm.split(':').map(Number); return `${((h0 + 11) % 12) + 1}:${String(m).padStart(2, '0')}`; };
+/** Mon–Fri columns of periods in time order. Tap a period to mark it free (or not) that day. */
+function freeGrid(meetings, onToggle, keyPrefix) {
+  return h('div', { class: 'fgrid', role: 'group', 'aria-label': 'Free periods, Monday to Friday' },
+    ...GRID_DAYS.map((wd) => h('div', { class: 'fgrid-day', role: 'group', 'aria-label': DAY_LONG[wd] },
+      h('div', { class: 'fgrid-head', 'aria-hidden': 'true' }, DAY_SHORT[wd]),
+      ...gridPeriods(MIDDLESEX, wd).map((p) => {
+        const key = `${wd}:${p.code}`;
+        const on = meetings.has(key);
+        return h('button', {
+          type: 'button', class: ['fgrid-cell', on && 'is-free', p.extra && 'is-extra', p.code.endsWith('x') && 'is-x', !p.extra && `blk-${p.code[0]}`],
+          'aria-pressed': String(on), 'data-key': `${keyPrefix}-${wd}-${p.code}`, onclick: () => onToggle(key),
+        },
+        h('span', { class: 'visually-hidden' }, `${DAY_LONG[wd]} `),
+        p.label === 'Community time'
+          ? [h('span', { class: 'fgrid-code', 'aria-hidden': 'true' }, 'Comm.'), h('span', { class: 'visually-hidden' }, 'Community time')]
+          : h('span', { class: 'fgrid-code' }, p.extra ? p.label : p.code),
+        p.extra ? null : h('span', { class: 'visually-hidden' }, ' block'),
+        h('span', { class: 'fgrid-time' }, ` ${gridTime(p.start)}`));
+      }))));
+}
+
 function setupCard() {
-  const d = (app.setupDraft ||= { step: 1, wk: null, free: [], keep: [] });
-  const free = new Set(d.free), keep = new Set(d.keep);
+  const d = (app.setupDraft ||= { step: 1, wk: null, free: [], keep: [], meetings: [] });
+  const free = new Set(d.free), keep = new Set(d.keep), meetings = new Set(d.meetings || []);
   const update = (focusKey) => {
     d.free = [...free].sort();
-    d.keep = [...keep].filter((L) => free.has(L)).sort();
+    d.meetings = [...meetings].sort();
+    const somewhere = freeLettersIn(free, meetings);
+    d.keep = [...keep].filter((L) => somewhere.has(L)).sort();
     render();
     if (focusKey) document.querySelector(`[data-key="${focusKey}"]`)?.focus();
   };
@@ -502,23 +544,27 @@ function setupCard() {
   const letters = h('div', { class: 'block-grid', role: 'group', 'aria-label': 'Free blocks' },
     ...MIDDLESEX.blocks.map((L) => h('button', {
       type: 'button', class: 'block-chip', 'aria-pressed': String(free.has(L)), 'data-key': `setup-free-${L}`,
-      onclick: () => { if (free.has(L)) { free.delete(L); keep.delete(L); } else free.add(L); update(`setup-free-${L}`); },
+      onclick: () => { toggleLetter(free, meetings, L); update(`setup-free-${L}`); },
     }, L)));
-  const keepRow = free.size ? h('div', {},
+  const grid = freeGrid(meetings, (key) => { meetings.has(key) ? meetings.delete(key) : meetings.add(key); update(`setup-grid-${key.replace(':', '-')}`); }, 'setup-grid');
+  const somewhere = freeLettersIn(free, meetings);
+  const keepRow = somewhere.size ? h('div', {},
     h('p', { class: 'setup-q' }, 'Keep any of them free for yourself?', h('span', { class: 'hint block' }, 'Optional. Blockwise won\'t plan work in these.')),
     h('div', { class: 'block-grid', role: 'group', 'aria-label': 'Free blocks to keep free' },
-      ...[...free].sort().map((L) => h('button', {
+      ...[...somewhere].sort().map((L) => h('button', {
         type: 'button', class: 'block-chip', 'aria-pressed': String(keep.has(L)), 'aria-label': `Keep ${L} block free`, 'data-key': `setup-keep-${L}`,
         onclick: () => { keep.has(L) ? keep.delete(L) : keep.add(L); update(`setup-keep-${L}`); },
       }, L)))) : null;
   return h('section', { class: 'setup', 'aria-label': 'Set up your classes' },
     h('p', { class: 'setup-step' }, 'Step 2 of 2'),
-    h('h2', { class: 'setup-title', tabindex: '-1', 'data-key': 'setup-title' }, 'Which blocks are free for you?'),
+    h('h2', { class: 'setup-title', tabindex: '-1', 'data-key': 'setup-title' }, 'What are your free blocks?'),
     h('p', { class: 'setup-summary' }, d.wk === 'NONE' ? `Saturday, ${thisSatShort()}: no classes ` : `Week: ${saturdayLetters(d.wk)} on Saturday (${d.wk} week) `,
       button('Change', () => go2(1), 'btn-link btn-small', { 'aria-label': 'Change the week' })),
     d.wk === 'NONE' ? h('p', { class: 'hint' }, 'Saturdays stay class-free. If a later Saturday has classes, tap it on Week.') : null,
-    h('p', { class: 'hint' }, 'Select every block where you have no class.'),
+    h('p', { class: 'hint' }, 'Tap each letter where you usually have no class.'),
     letters,
+    h('p', { class: 'setup-q' }, 'Check each day', h('span', { class: 'hint block' }, 'Some blocks aren\'t free every day (an ensemble, a lab). Tap a period to change just that day. Senate, Meet and Community time are here too.')),
+    grid,
     keepRow,
     h('div', { class: 'actions' },
       button('Back', () => go2(1), 'btn-ghost'),
@@ -527,8 +573,9 @@ function setupCard() {
         app.setupDraft = null;
         commit((s) => {
           // "No classes" → no week type: Saturdays stay free unless the student sets one (Week → tap Saturday)
-          s.settings.school = { id: 'middlesex', freeBlocks: [...free].sort(), freeExt: [], anchor: wk === 'NONE' ? null : { monday: mondayOf(today()), type: wk } };
-          if (keep.size) s.settings.school.keepFree = [...keep].filter((L) => free.has(L)).sort();
+          s.settings.school = { id: 'middlesex', freeBlocks: [...free].sort(), freeExt: [], freeMeetings: [...meetings].sort(), anchor: wk === 'NONE' ? null : { monday: mondayOf(today()), type: wk } };
+          const kf = [...keep].filter((L) => freeLettersIn(free, meetings).has(L)).sort();
+          if (kf.length) s.settings.school.keepFree = kf;
           ensureWeek(s).study = JSON.parse(JSON.stringify(MIDDLESEX.study));
           s.prefs.setupNudgeDismissed = true;
         }, 'Saved. Your free blocks and study hours are in.');
@@ -1485,26 +1532,26 @@ function ensureWeek(s) { s.settings.week = s.settings.week || { study: {}, items
 function openSchoolSetup() {
   const sc = app.state.settings.school;
   const free = new Set(sc ? sc.freeBlocks : []);
-  const ext = new Set(sc ? sc.freeExt : []);
+  const meetings = sc ? freeMeetingKeys(sc, MIDDLESEX) : new Set(); // older saves: every period of the free letters
   const keep = new Set(sc ? sc.keepFree || [] : []);
   const t = today();
   const current = sc ? (sc.anchor ? weekTypeFor(app.state, t) : 'NONE') : null;
   const letterBox = h('div', { class: 'block-grid', role: 'group', 'aria-label': 'Free blocks' });
-  const extBox = h('div', { class: 'block-grid', role: 'group', 'aria-label': 'Extension blocks you don\'t attend' });
+  const gridBox = h('div', {});
   const keepBox = h('div', { class: 'block-grid', role: 'group', 'aria-label': 'Free blocks to keep free' });
   const keepNone = h('p', { class: 'hint' }, 'Pick your free blocks first.');
-  const renderChips = () => {
-    clear(letterBox); clear(extBox); clear(keepBox);
+  // Redraw in place, then put focus back on the control that was tapped
+  const renderChips = (focusKey) => {
+    clear(letterBox); clear(gridBox); clear(keepBox);
     for (const L of MIDDLESEX.blocks) {
-      letterBox.append(h('button', { type: 'button', class: 'block-chip', 'aria-pressed': String(free.has(L)), onclick: () => { if (free.has(L)) { free.delete(L); keep.delete(L); } else free.add(L); renderChips(); } }, L));
+      letterBox.append(h('button', { type: 'button', class: 'block-chip', 'aria-pressed': String(free.has(L)), 'data-key': `school-free-${L}`, onclick: () => { toggleLetter(free, meetings, L); renderChips(`school-free-${L}`); } }, L));
     }
-    for (const L of [...free].sort()) keepBox.append(h('button', { type: 'button', class: 'block-chip', 'aria-pressed': String(keep.has(L)), 'aria-label': `Keep ${L} block free`, onclick: () => { keep.has(L) ? keep.delete(L) : keep.add(L); renderChips(); } }, L));
-    keepNone.hidden = free.size > 0;
-    for (const L of MIDDLESEX.blocks) {
-      const x = `${L}x`;
-      if (free.has(L)) continue;
-      extBox.append(h('button', { type: 'button', class: 'block-chip', 'aria-pressed': String(ext.has(x)), onclick: () => { ext.has(x) ? ext.delete(x) : ext.add(x); renderChips(); } }, x));
-    }
+    gridBox.append(freeGrid(meetings, (key) => { meetings.has(key) ? meetings.delete(key) : meetings.add(key); renderChips(`school-grid-${key.replace(':', '-')}`); }, 'school-grid'));
+    const somewhere = freeLettersIn(free, meetings);
+    for (const L of [...keep]) if (!somewhere.has(L)) keep.delete(L);
+    for (const L of [...somewhere].sort()) keepBox.append(h('button', { type: 'button', class: 'block-chip', 'aria-pressed': String(keep.has(L)), 'aria-label': `Keep ${L} block free`, 'data-key': `school-keep-${L}`, onclick: () => { keep.has(L) ? keep.delete(L) : keep.add(L); renderChips(`school-keep-${L}`); } }, L));
+    keepNone.hidden = somewhere.size > 0;
+    if (focusKey) document.querySelector(`#sheet [data-key="${focusKey}"]`)?.focus();
   };
   renderChips();
   const wtName = uniqueId('wt');
@@ -1517,8 +1564,8 @@ function openSchoolSetup() {
       if (!picked) { err.textContent = 'Pick which week this is.'; return; }
       const useStudy = e.target.querySelector(`#${useStudyId}`).checked;
       commit((s) => {
-        s.settings.school = { id: 'middlesex', freeBlocks: [...free].sort(), freeExt: [...ext].filter((x) => !free.has(x[0])).sort(), anchor: picked.value === 'NONE' ? null : { monday: mondayOf(t), type: picked.value } };
-        const kf = [...keep].filter((L) => free.has(L)).sort();
+        s.settings.school = { id: 'middlesex', freeBlocks: [...free].sort(), freeExt: [], freeMeetings: [...meetings].sort(), anchor: picked.value === 'NONE' ? null : { monday: mondayOf(t), type: picked.value } };
+        const kf = [...keep].filter((L) => freeLettersIn(free, meetings).has(L)).sort();
         if (kf.length) s.settings.school.keepFree = kf;
         if (useStudy) ensureWeek(s).study = JSON.parse(JSON.stringify(MIDDLESEX.study));
         s.prefs.setupNudgeDismissed = true;
@@ -1526,17 +1573,17 @@ function openSchoolSetup() {
       closeSheet();
     } },
     h('fieldset', { class: 'field' },
-      h('legend', {}, '1. Which blocks are free for you?'),
-      h('p', { class: 'hint' }, 'Tap every letter where you have no class. Leave the rest.'),
+      h('legend', {}, '1. What are your free blocks?'),
+      h('p', { class: 'hint' }, 'Tap each letter where you usually have no class.'),
       letterBox),
+    h('fieldset', { class: 'field' },
+      h('legend', {}, 'Check each day'),
+      h('p', { class: 'hint' }, 'Some blocks aren\'t free every day. Tap a period to change just that day. Senate, Meet and Community time are here too.'),
+      gridBox),
     h('fieldset', { class: 'field' },
       h('legend', {}, 'Keep any free block for yourself? (optional)'),
       h('p', { class: 'hint' }, 'Tap a free block you\'d rather not use for work — lunch, a club, time off. You can also keep a block free for one day from Week.'),
       keepNone, keepBox),
-    h('details', { class: 'disclosure-plain' },
-      h('summary', {}, 'Extension (x) blocks you don\'t attend (optional)'),
-      h('p', { class: 'hint' }, 'If you have class in a block but skip its extension, tap it here. Extensions of your free blocks are already free.'),
-      extBox),
     h('fieldset', { class: 'field' },
       h('legend', {}, '2. Which week is this?'),
       h('p', { class: 'hint' }, MIDDLESEX.weekTypeHint),

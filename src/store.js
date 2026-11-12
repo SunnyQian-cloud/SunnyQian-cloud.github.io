@@ -149,12 +149,18 @@ export function validateState(raw) {
         if (!isObj(sc) || sc.id !== 'middlesex' || !Array.isArray(sc.freeBlocks) || !sc.freeBlocks.every((b) => letters.includes(b)) ||
             (sc.freeExt != null && (!Array.isArray(sc.freeExt) || !sc.freeExt.every((b) => letters.map((l) => `${l}x`).includes(b)))) ||
             (sc.keepFree != null && (!Array.isArray(sc.keepFree) || !sc.keepFree.every((b) => letters.includes(b)))) ||
+            // Per-day free periods, Mon–Fri ("4:G" = Thursday G block; also x blocks and Senate/Meet/Community)
+            (sc.freeMeetings != null && (!Array.isArray(sc.freeMeetings) || sc.freeMeetings.length > 200 ||
+              !sc.freeMeetings.every((k) => typeof k === 'string' && /^[1-5]:([A-G]x?|Senate|Meet|Community)$/.test(k)))) ||
             (sc.anchor !== null && (!isObj(sc.anchor) || !isValidISODate(sc.anchor.monday) || !['ECF', 'ADB'].includes(anchorType)))) {
           errors.push('School schedule settings are invalid.');
         } else {
           // anchor null = "No Saturday classes" (Saturdays only have classes when set for that Saturday)
           settings.school = { id: sc.id, freeBlocks: [...new Set(sc.freeBlocks)].sort(), freeExt: [...new Set(sc.freeExt || [])].sort(), anchor: sc.anchor === null ? null : { monday: sc.anchor.monday, type: anchorType } };
-          const keep = [...new Set(sc.keepFree || [])].filter((b) => sc.freeBlocks.includes(b)).sort();
+          if (Array.isArray(sc.freeMeetings)) settings.school.freeMeetings = [...new Set(sc.freeMeetings)].sort();
+          // "Keep free" letters must be free somewhere: a free letter, or free on at least one weekday
+          const freeSomewhere = new Set([...sc.freeBlocks, ...(sc.freeMeetings || []).map((k) => k.split(':')[1]).filter((c) => /^[A-G]x?$/.test(c)).map((c) => c[0])]);
+          const keep = [...new Set(sc.keepFree || [])].filter((b) => freeSomewhere.has(b)).sort();
           if (keep.length) settings.school.keepFree = keep;
         }
       }

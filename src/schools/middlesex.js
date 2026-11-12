@@ -4,10 +4,14 @@
 // ECF Saturday (Oct 24): E 9:05–9:50, C 9:55–10:40, F 10:45–11:30. ADB Saturday (Oct 31, Apr 24): A, D, B.
 // Note: the spring planner (Apr 3, 2027) shows a B/F Saturday (Bx 9:05–9:30, B 9:30–10:15, F 10:20–11:05, Fx 11:05–11:30).
 // If Saturdays change in spring, add that week type then; until confirmed, this term's ECF/ADB is used.
-// Only class blocks are listed: chapel, community time, meetings and lunch are never treated as free time.
+// Only class blocks are in the grid; Senate, Meet and Community time are in `extra` (free only if a student marks them).
+// Chapel and lunch are never treated as free time.
 // A weekday set to `null` would mean "not confirmed" (no automatic free blocks that day).
 
 const P = (code, start, end) => ({ code, start, end });
+// Non-class periods that some students have free ("Unscheduled" on their printed schedule). Never free unless
+// the student marks them in the free-block grid. Times from a student's printed Semester 1 schedule (Nov 2026).
+const X = (code, label, start, end) => ({ code, label, start, end, extra: true });
 
 const TUE = [P('G', '08:15', '09:00'), P('D', '09:05', '09:50'), P('E', '10:55', '11:40'), P('Ex', '11:40', '12:05'),
   P('B', '12:30', '13:15'), P('A', '13:20', '14:05'), P('C', '14:10', '14:55'), P('Cx', '14:55', '15:20')];
@@ -35,6 +39,12 @@ export const MIDDLESEX = Object.freeze({
       6: [P('E', '09:05', '09:50'), P('C', '09:55', '10:40'), P('F', '10:45', '11:30')] },
     ADB: { 0: [], 1: MON, 2: TUE, 3: WED, 4: THU, 5: FRI,
       6: [P('A', '09:05', '09:50'), P('D', '09:55', '10:40'), P('B', '10:45', '11:30')] },
+  },
+  // Senate, Meet and Community time (Mon–Fri), offered in the free-block grid; off unless the student marks them.
+  extra: {
+    1: [X('Senate', 'Senate', '09:55', '10:20'), X('Meet', 'Meet', '15:00', '15:30')],
+    2: [X('Community', 'Community time', '09:55', '10:50')],
+    5: [X('Community', 'Community time', '09:55', '10:25'), X('Meet', 'Meet', '14:35', '15:30')],
   },
   // Dorm study hours (same for every grade): Sun–Thu 7:30–9:30 PM, Fri 7:30–9:00 PM, none on Saturday.
   study: {

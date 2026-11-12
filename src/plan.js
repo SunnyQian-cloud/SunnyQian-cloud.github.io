@@ -68,6 +68,38 @@ export function periodsFor(school, weekType, wd) {
   return versions.every((v) => JSON.stringify(v) === JSON.stringify(versions[0])) ? versions[0] : null;
 }
 
+const letterFree = (sc) => new Set([...(sc.freeBlocks || []), ...(sc.freeBlocks || []).map((b) => `${b}x`), ...(sc.freeExt || [])]);
+
+/** A weekday's periods for the free-block grid (Mon–Fri): class blocks, x blocks and Senate/Meet/Community, in time order. */
+export function gridPeriods(school, wd) {
+  return [...(periodsFor(school, null, wd) || []), ...((school.extra && school.extra[wd]) || [])]
+    .sort((a, b) => a.start.localeCompare(b.start));
+}
+
+/** The student's free weekday periods as "weekday:code" keys — their per-day choices, or (older saves) every period of their free letters. */
+export function freeMeetingKeys(sc, school) {
+  if (Array.isArray(sc.freeMeetings)) return new Set(sc.freeMeetings);
+  const free = letterFree(sc);
+  const keys = new Set();
+  for (let wd = 1; wd <= 5; wd++) for (const p of periodsFor(school, null, wd) || []) if (free.has(p.code)) keys.add(`${wd}:${p.code}`);
+  return keys;
+}
+
+/**
+ * Free periods on a weekday. Monday–Friday follow the student's per-day choices (a block can be free on Thursday
+ * and a class on Tuesday); Saturday follows their letters. null when that Saturday's blocks aren't known.
+ */
+export function freePeriodsOn(school, sc, wd, weekType) {
+  const periods = periodsFor(school, weekType, wd);
+  if (periods == null) return null;
+  if (wd >= 1 && wd <= 5) {
+    const keys = freeMeetingKeys(sc, school);
+    return gridPeriods(school, wd).filter((p) => keys.has(`${wd}:${p.code}`));
+  }
+  const free = letterFree(sc);
+  return periods.filter((p) => free.has(p.code));
+}
+
 /** The timetable to read class times from: the student's school, or before setup the Middlesex one (unless they said they're not at Middlesex). */
 function timetableSchool(state) {
   const sc = state.settings && state.settings.school;
@@ -87,18 +119,18 @@ export function schoolBlocksForDate(state, date) {
   const weekType = weekTypeFor(state, date);
   const noClasses = !!day.noClasses || school.calendar.noClassDates.includes(date);
   if (noClasses) return { blocks: [], kept: [], weekType, unknown: false, noClasses: true, configured: true };
-  const periods = periodsFor(school, weekType, weekdayOf(date));
+  const freeP = freePeriodsOn(school, sc, weekdayOf(date), weekType);
   // A Saturday with no week type: the student chose "No Saturday classes" and hasn't set this Saturday.
-  if (periods == null) return { blocks: [], kept: [], weekType: null, unknown: false, noClasses: true, satOff: true, configured: true };
-  const free = new Set([...sc.freeBlocks, ...sc.freeBlocks.map((b) => `${b}x`), ...(sc.freeExt || [])]);
+  if (freeP == null) return { blocks: [], kept: [], weekType: null, unknown: false, noClasses: true, satOff: true, configured: true };
   const always = new Set(sc.keepFree || []);
   const skipDay = new Set(Array.isArray(day.skipBlocks) ? day.skipBlocks : []);
   const blocks = [], kept = [];
-  for (const p of periods.filter((x) => free.has(x.code))) {
+  for (const p of freeP) {
+    // Senate/Meet/Community time keep their own name and can't be "kept free" by letter (remove them in the grid instead)
     const b = { id: `s_${p.code}_${p.start.replace(':', '')}`, date, start: p.start, end: p.end,
-      label: `${p.code} block`, letter: p.code[0], kind: 'free', category: 'free', school: true };
-    if (always.has(b.letter)) kept.push({ ...b, keptWhy: 'always' });
-    else if (skipDay.has(b.letter)) kept.push({ ...b, keptWhy: 'day' });
+      label: p.extra ? p.label : `${p.code} block`, letter: p.extra ? null : p.code[0], kind: 'free', category: 'free', school: true };
+    if (b.letter && always.has(b.letter)) kept.push({ ...b, keptWhy: 'always' });
+    else if (b.letter && skipDay.has(b.letter)) kept.push({ ...b, keptWhy: 'day' });
     else blocks.push(b);
   }
   return { blocks, kept, weekType, unknown: false, noClasses: false, configured: true };
@@ -155,7 +187,9 @@ export function classBlocksOn(state, date) {
   const day = (state.days && state.days[date]) || {};
   if (day.noClasses || school.calendar.noClassDates.includes(date)) return [];
   const letters = [...new Set((periodsFor(school, weekTypeFor(state, date), weekdayOf(date)) || []).filter((p) => p.code.length === 1).map((p) => p.code))];
-  const free = new Set((sc && sc.freeBlocks) || []); // before setup every block that meets is offered
+  // Free that day (per-day choices): not a class, so not offered. Before setup every block that meets is offered.
+  const info = sc ? schoolBlocksForDate(state, date) : null;
+  const free = new Set(info ? [...info.blocks, ...info.kept].filter((b) => b.letter && b.label === `${b.letter} block`).map((b) => b.letter) : []);
   return letters.filter((L) => !free.has(L)).map((L) => ({ letter: L, start: blockStartOn(state, date, L) }))
     .sort((a, b) => a.start.localeCompare(b.start));
 }

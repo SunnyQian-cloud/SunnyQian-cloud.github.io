@@ -483,3 +483,17 @@ body.intro-on { padding-bottom: 24px; }
 .banner-usage .slim-row { justify-content: flex-start; gap: 10px; }
 .plain-list { margin: 0 0 12px; padding-left: 1.2em; }
 .plain-list li { margin: 2px 0; }
+
+/* free-block grid (Mon–Fri, like the printed schedule) */
+.fgrid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; margin: 8px 0 12px; }
+.fgrid-day { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.fgrid-head { text-align: center; font-size: 0.8rem; font-weight: 700; color: var(--ink-2); padding-bottom: 2px; }
+.fgrid-cell { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0; min-height: 44px; padding: 3px 2px;
+  border-radius: 8px; border: 1px solid var(--line-strong); background: transparent; color: var(--ink-2); font: inherit; cursor: pointer; min-width: 0; }
+.fgrid-cell.is-x, .fgrid-cell.is-extra { min-height: 36px; border-style: dashed; }
+.fgrid-code { font-weight: 700; font-size: 0.86rem; line-height: 1.1; max-width: 100%; overflow-wrap: anywhere; }
+.fgrid-cell.is-extra .fgrid-code { font-size: 0.68rem; font-weight: 600; }
+.fgrid-time { font-size: 0.68rem; line-height: 1.1; color: var(--muted); }
+.fgrid-cell.is-free { background: var(--accent-soft); border: 2px solid var(--accent); color: var(--ink); }
+.fgrid-cell.is-free .fgrid-time { color: var(--ink-2); }
+.fgrid-cell:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }

@@ -3,7 +3,7 @@
 // imports them once; Blockwise itself says what to work on when they open it.
 import { addDays, weekdayOf, parseHM, formatHM, pad } from './dates.js';
 import { SCHOOLS } from './schools/middlesex.js';
-import { daySettings, weekTypeFor } from './plan.js';
+import { daySettings, weekTypeFor, freePeriodsOn } from './plan.js';
 
 const BYDAY = ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'];
 const icsDate = (iso, hm) => `${iso.replace(/-/g, '')}T${hm.replace(':', '')}00`;
@@ -38,22 +38,22 @@ export function reminderEvents(state, today) {
   const sc = state.settings && state.settings.school;
   const school = sc && SCHOOLS[sc.id];
   if (school) {
-    const free = new Set([...sc.freeBlocks, ...sc.freeBlocks.map((b) => `${b}x`), ...(sc.freeExt || [])]);
     for (const type of school.weekTypes) {
       for (let wd = 0; wd < 7; wd++) {
         const keep = new Set(sc.keepFree || []);
-        const periods = (school.grid[type][wd] || []).filter((p) => free.has(p.code) && !keep.has(p.code[0]));
+        const periods = (freePeriodsOn(school, sc, wd, type) || []).filter((p) => p.extra || !keep.has(p.code[0]));
         // Days identical in both week types get one weekly event (made from the first week type only).
         const sameBoth = JSON.stringify(school.grid[school.weekTypes[0]][wd]) === JSON.stringify(school.grid[school.weekTypes[1]][wd]);
         if (sameBoth && type !== school.weekTypes[0]) continue;
         if (!sameBoth && !sc.anchor) continue; // "No Saturday classes": no repeating Saturday alerts
         for (const m of mergePeriods(periods)) {
-          const label = m.codes.filter((c) => !c.endsWith('x')).join(' + ') || m.codes.join(' + ');
+          const names = m.codes.filter((c) => !/^[A-G]x$/.test(c)).map((c) => (/^[A-G]$/.test(c) ? `${c} block` : (periods.find((p) => p.code === c) || {}).label || c));
+          const label = names.join(' + ') || `${m.codes.join(' + ')} block`;
           const start = sameBoth ? firstDate(state, today, wd) : firstDate(state, today, wd, type);
           if (!start) continue;
           events.push({
             uid: `blockwise-${sc.id}-${type}-${wd}-${m.start.replace(':', '')}@blockwise`,
-            title: `${label} block free – open Blockwise`, weekday: wd, start: m.start, end: m.end,
+            title: `${label} free – open Blockwise`, weekday: wd, start: m.start, end: m.end,
             firstDate: start, everyOtherWeek: !sameBoth,
           });
         }
