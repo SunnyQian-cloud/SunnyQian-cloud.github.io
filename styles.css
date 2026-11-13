@@ -11,7 +11,7 @@
   --ink-2: #c2c2c2;
   --muted: #9e9e9e;
   --primary: #2f6fd6;          /* filled buttons (white text ≥ 4.5:1) */
-  --primary-hover: #3a7ae0;
+  --primary-hover: #2a64c4;    /* darker on hover, so white text stays ≥ 4.5:1 (5.65) */
   --accent: #7eaeff;           /* blue text and icons on dark */
   --accent-line: #2d5aa3;      /* blue borders */
   --accent-soft: #172438;
@@ -46,6 +46,8 @@ a { color: var(--accent); }
 :focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; border-radius: 8px; }
 h1:focus, h2:focus, h3:focus { outline: none; }
 h1:focus-visible, h2:focus-visible { outline: 3px solid var(--focus); }
+/* The plan's title gets focus only so screen readers announce it after saving; it isn't a control, so no ring */
+#now-title:focus, #now-title:focus-visible { outline: none; }
 .visually-hidden { position: absolute !important; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .skip-link { position: absolute; left: 8px; top: -60px; background: var(--surface); color: var(--ink); padding: 8px 12px; border-radius: 8px; z-index: 50; }
 .skip-link:focus { top: 8px; }
@@ -177,6 +179,9 @@ main { max-width: 560px; margin: 0 auto; padding: 16px; outline: none; }
 .why-link { margin-top: 4px; padding-left: 0; }
 .now-links { display: flex; gap: 14px; align-items: center; }
 .now-links .btn { margin-top: 4px; }
+/* First plan only: one line on how to adjust it */
+.now-tip { margin: 10px 0 0; padding-top: 10px; border-top: 1px solid var(--line); font-size: 0.88rem; color: var(--ink-2); }
+.now-tip .btn-link { padding: 0 2px; min-height: 24px; font-size: 0.88rem; }
 
 .alerts { margin: 12px 0 0; display: flex; flex-direction: column; gap: 6px; }
 .alert { margin: 0; padding: 8px 12px; border-radius: 10px; background: var(--surface-2); color: var(--ink-2); font-size: 0.93rem; }
@@ -380,12 +385,12 @@ dialog::backdrop { background: rgba(0, 0, 0, 0.65); }
 /* ---------- toast ---------- */
 .toast {
   position: fixed; left: 50%; bottom: calc(var(--nav-h) + env(safe-area-inset-bottom) + 12px); transform: translateX(-50%) translateY(20px);
-  max-width: min(92vw, 520px); background: #f2f2f2; color: #141414; padding: 10px 16px; border-radius: 12px;
+  width: max-content; max-width: min(92vw, 520px); background: #f2f2f2; color: #141414; padding: 10px 16px; border-radius: 12px;
   font-size: 0.95rem; opacity: 0; pointer-events: none; transition: opacity 0.2s, transform 0.2s; z-index: 60;
   display: flex; align-items: center; gap: 12px;
 }
 .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); pointer-events: auto; }
-.toast-action { background: transparent; border: 1px solid #141414; color: #141414; border-radius: 8px; padding: 6px 12px; font: 700 0.92rem var(--font); cursor: pointer; min-height: 36px; }
+.toast-action { flex: none; white-space: nowrap; background: transparent; border: 1px solid #141414; color: #141414; border-radius: 8px; padding: 6px 12px; font: 700 0.92rem var(--font); cursor: pointer; min-height: 36px; }
 @media (min-width: 900px) { .toast { bottom: 24px; } }
 
 @media (max-width: 380px) {

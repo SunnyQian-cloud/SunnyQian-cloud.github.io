@@ -62,6 +62,8 @@ const app = {
   addOpen: false,   // the add box on Today
   addDraft: null,   // a parsed line waiting for Save
   addText: '',      // what's typed in the add box (kept across re-renders)
+  addMulti: false,  // after "Add another", the box stays open between saves
+  setupExpanded: false, // a task was saved before setup, and the student tapped Set up free blocks
   voiceState: null,
   lastToday: null,
 };
@@ -307,14 +309,14 @@ function renderToday(week) {
 
   const open = state.tasks.filter((x) => x.status === 'open');
   if (app.mode === 'real' && isStandalone() && !state.tasks.length && !state.prefs.bringOverDismissed) put(root, bringOverCard());
-  if (app.mode === 'real' && !state.settings.school && !state.prefs.setupNudgeDismissed) put(root, setupCard());
-  else if (checklistOpen()) put(root, checklistCard());
-  // The Home Screen card waits until the student is set up and has something saved (it was crowding the first screen).
-  if (app.mode === 'real' && !isStandalone() && isTouchDevice() && !state.prefs.homeScreenDismissed && state.tasks.length && !checklistOpen()) put(root, homeScreenCard(true));
+  // Setup comes first only until something is saved. After that the plan comes first, and unfinished setup is one line under it.
+  const notSetUp = app.mode === 'real' && !state.settings.school && !state.prefs.setupNudgeDismissed;
+  const setupLater = () => (app.setupExpanded || (app.setupDraft && app.setupDraft.step === 2) ? setupCard() : freeBlocksInvite(() => { app.setupExpanded = true; render(); $('[data-key="setup-title"]')?.focus(); }, 'today-setup'));
+  if (notSetUp && !state.tasks.length) put(root, setupCard());
   if (app.addOpen || app.addDraft || !open.length) put(root, addBox(open.length > 0));
   if (!open.length) {
-    const guided = (app.mode === 'real' && !state.settings.school && !state.prefs.setupNudgeDismissed) || checklistOpen();
-    if (!guided) put(root, h('p', { class: 'empty-hint' }, 'Add what\'s due — one line is enough, like “Bio test Tuesday, study 45 min”.'));
+    if (notSetUp && state.tasks.length) put(root, setupLater());
+    if (!notSetUp) put(root, h('p', { class: 'empty-hint' }, 'Add what\'s due — one line is enough, like “Bio test Tuesday, study 45 min”.'));
     put(root, doneToday(t));
     if (week) put(root, todaySchedule(week.days[0], t)); // the day's timetable shows even before anything is added
     if (app.mode === 'real') put(root, h('p', { class: 'example-link' }, button('See an example day', enterDemo, 'btn-link btn-small')));
@@ -323,9 +325,20 @@ function renderToday(week) {
   if (!week) { put(root, h('p', { class: 'alert alert-danger' }, 'Something went wrong making your plan. Your tasks are safe.')); return; }
   const plan = week.days[0];
   put(root, nowCard(plan, t, week));
+  if (notSetUp) put(root, setupLater());
   put(root, alerts(plan, t));
+  // The Home Screen card waits until the student has looked at a first plan (it was crowding the first screens).
+  if (app.mode === 'real' && !isStandalone() && isTouchDevice() && !state.prefs.homeScreenDismissed && state.prefs.reviewedNext) put(root, homeScreenCard(true));
   put(root, doneToday(t));
   put(root, todaySchedule(plan, t));
+}
+
+/** "Add your free blocks · Your plan uses study hours only for now." (Today and Week, before setup) */
+function freeBlocksInvite(onSetUp, key) {
+  return h('section', { class: 'callout-card', 'aria-label': 'Set up your free blocks' },
+    h('p', { class: 'callout-title' }, 'Add your free blocks'),
+    h('p', { class: 'small' }, 'Your plan uses study hours only for now.'),
+    h('div', { class: 'actions' }, button('Set up free blocks', onSetUp, 'btn-primary btn-small', { 'data-key': key })));
 }
 
 // ---------- welcome screen (first visit only) ----------
@@ -423,10 +436,9 @@ function checklistSteps() {
     { label: `Choose your week (${MIDDLESEX.weekTypes.map(saturdayLetters).join(' or ')} on Saturday).`, done: set },
     { label: 'Mark your free blocks: tell Blockwise when you can work.', done: set },
     { label: 'Add something due and how long it will take.', done: st.tasks.length > 0 },
-    { label: 'Review your next step: change anything that doesn\'t fit.', done: !!st.prefs.reviewedNext },
+    { label: 'Check your next step: Edit fixes the task, Not now moves it to a later day.', done: !!st.prefs.reviewedNext },
   ];
 }
-const checklistOpen = () => app.mode === 'real' && !app.state.prefs.checklistDismissed && checklistSteps().some((x) => !x.done);
 
 function checklistList(steps) {
   const cur = steps.findIndex((x) => !x.done);
@@ -435,33 +447,21 @@ function checklistList(steps) {
     h('span', {}, x.label, x.done ? h('span', { class: 'visually-hidden' }, ' (done)') : null))));
 }
 
-function checklistCard() {
-  const steps = checklistSteps();
-  const n = steps.filter((x) => x.done).length;
-  return h('section', { class: 'callout-card checklist-card', 'aria-label': 'Getting started' },
-    h('div', { class: 'checklist-head' },
-      h('p', { class: 'callout-title' }, `Getting started · ${n} of ${steps.length} done`),
-      button('Hide', () => commit((s) => { s.prefs.checklistDismissed = true; }, 'You can find it again in ⋯ → How to use Blockwise.'), 'btn-link btn-small', { 'aria-label': 'Hide the getting started list' })),
-    checklistList(steps),
-    scheduleTip());
-}
-
-/** Optional, never a required step: where one-day changes live (the app's real control names). */
+/** Optional, never a required step: where one-day changes live (the app's real control names). Shown in How to use. */
 function scheduleTip() {
   return h('p', { class: 'checklist-tip' }, h('strong', {}, 'Day off or schedule change? '),
     'On Week, tap that day and turn on “No classes this day” or “Busy that evening.” For today, use Edit schedule.');
 }
 
-/** Step 4 is done once the student looks at or changes a suggestion. */
+/** The first plan's tip goes once the student looks at or acts on a suggestion (nothing has to be changed). */
 function markReviewed() {
   if (app.mode !== 'real' || app.state.prefs.reviewedNext || !app.state.tasks.length) return;
   app.state.prefs.reviewedNext = true;
   persist();
-  render(); // the Getting started list ticks off step 4 right away
+  render(); // the tip on the Next card goes right away
 }
 
 function openHowTo() {
-  const dismissed = app.mode === 'real' && app.state.prefs.checklistDismissed && checklistSteps().some((x) => !x.done);
   openSheet('How to use Blockwise', [
     checklistList(checklistSteps()),
     scheduleTip(),
@@ -471,7 +471,6 @@ function openHowTo() {
       h('li', {}, h('strong', {}, 'Done'), ' — say whether you finished or about how much is left. ', h('strong', {}, 'Not now'), ' moves it off today; the plan rearranges.'),
       h('li', {}, h('strong', {}, 'Week'), ' shows your free blocks and study hours for the next days. Tap a free block to keep it free.'),
       h('li', {}, 'Tap any task name to change it, finish it or delete it. ', h('strong', {}, 'Tasks'), ' lists everything.')),
-    dismissed ? button('Show the list on Today again', () => { closeSheet(); commit((s) => { delete s.prefs.checklistDismissed; }); }, 'btn-secondary btn-small') : null,
   ]);
 }
 
@@ -627,7 +626,7 @@ function addBox(canClose) {
     !canClose && !app.addDraft ? h('p', { class: 'hint add-hint' }, 'For a test, give the study time — not how long the test lasts.') : null,
     canClose && !app.addDraft ? h('div', { class: 'add-foot' },
       button('Paste a list instead', () => openCapture({ bulk: true }), 'btn-link btn-small'),
-      button('Close', () => { app.addOpen = false; app.addText = ''; stopVoice(); render(); }, 'btn-link btn-small', { 'data-key': 'add-close' })) : null);
+      button('Close', () => { app.addOpen = false; app.addMulti = false; app.addText = ''; stopVoice(); render(); }, 'btn-link btn-small', { 'data-key': 'add-close' })) : null);
 }
 
 function micIcon() {
@@ -678,7 +677,7 @@ function draftLine(d) {
   let askWhy = null; // why there are no block buttons for that date
   if (askOpen && !askClasses.length && blocksKnown) {
     const sat = D.weekdayOf(d.deadlineDate) === 6;
-    askWhy = sat && !schoolSet ? 'Saturday\'s blocks depend on the week: choose your week above to see them.'
+    askWhy = sat && !schoolSet ? 'Saturday\'s blocks depend on the week: choose your week in setup to see them.'
       : sat && schoolBlocksForDate(app.state, d.deadlineDate).satOff ? 'No Saturday classes are set for that day. If there are, tap that Saturday on Week.'
       : 'No classes meet that day.';
   }
@@ -727,11 +726,17 @@ function saveDraft(d) {
   if (!validateDraft(d).ok) { render(); return; }
   const task = draftToTask(d, now().toISOString());
   app.addDraft = null;
-  app.addOpen = true;
+  // One task: the box closes so the plan comes first ("Add another" reopens it). After Add another, it stays open for more.
+  const more = app.addMulti;
+  app.addOpen = more;
   app.addText = '';
-  commit((s) => { s.tasks.push(task); }, `Added “${task.title}”. Your week is updated.`);
+  // Let go of the Save button first, so the redraw doesn't park focus on a stray control (and a ring shows only after keyboard use)
+  if (!more) document.activeElement?.blur();
+  commit((s) => { s.tasks.push(task); }, null);
+  toast(`Added “${task.title}”. Your week is updated.`, more ? null : { label: 'Add another', fn: () => { app.addMulti = true; openAdd(); } });
   const input = document.getElementById('add-input');
-  if (input) { input.value = ''; input.focus(); }
+  if (more && input) { input.value = ''; input.focus(); }
+  else ($('#now-title') || $('#view-today .now h2') || $('#today-title'))?.focus();
 }
 
 function editDraftTitle(d) {
@@ -876,15 +881,18 @@ function nowCard(plan, t, week) {
     const over = plan.stopMin != null && nowMin() >= plan.stopMin;
     const title = over ? 'That\'s it for today' : plan.freeTotal === 0 ? 'No free time left today' : 'Nothing more today';
     const first = over ? 'Study hours are over.' : '';
-    const nextText = next ? `Next up: ${taskById(next.i.taskId)?.title} · ${D.relativeDateLabel(next.p.date, t)}${slotLabel(next.p.date, next.i) ? `, ${slotLabel(next.p.date, next.i)}` : ''} ${fmtT(next.i.start)}.` : 'Nothing else needs time this week.';
+    const nextTask = next && taskById(next.i.taskId);
+    const nextText = next ? `Next up: ${nextTask ? workLabel(nextTask) : 'Task'} · ${D.relativeDateLabel(next.p.date, t)}${slotLabel(next.p.date, next.i) ? `, ${slotLabel(next.p.date, next.i)}` : ''} ${fmtT(next.i.start)}.` : 'Nothing else needs time this week.';
     return h('section', { class: 'now now-empty', 'aria-label': 'Now' }, h('h2', { tabindex: '-1' }, title), h('p', { class: 'muted' }, `${first} ${nextText}`.trim()));
   }
   const { item, task, status } = ns;
   const fs = firstStepFor(task);
   const label = slotLabel(t, item);
+  // The first plan gets one line on how to adjust it; it goes once the student acts on it, taps Got it, or opens Week
+  const firstPlan = app.mode === 'real' && !app.state.prefs.reviewedNext;
   return h('section', { class: 'now', 'aria-labelledby': 'now-title' },
     h('p', { class: 'eyebrow' }, `${status === 'now' ? 'Now' : 'Next'} · ${label ? `${label} · ` : ''}${fmtRange(item.start, item.end)}`),
-    h('h2', { id: 'now-title', tabindex: '-1' }, task.title),
+    h('h2', { id: 'now-title', tabindex: '-1' }, workLabel(task)),
     h('p', { class: 'why-short' }, nowLine(plan, item, task)),
     task.firstStep || isSubstantial(task) ? h('p', { class: 'first-step' }, 'Start with: ', fs.text) : null,
     h('div', { class: 'actions now-actions' },
@@ -892,7 +900,9 @@ function nowCard(plan, t, week) {
       button('Not now', () => notNow(t, task), 'btn-secondary btn-large', { 'data-key': 'now-skip' })),
     h('div', { class: 'now-links' },
       button('Why this?', () => openWhy(plan, item, task), 'btn-link btn-small why-link'),
-      button('Edit', () => openEditTask(task.id), 'btn-link btn-small', { 'aria-label': `Edit ${task.title}: due date, time left, priority`, 'data-key': 'now-edit' })));
+      button('Edit', () => openEditTask(task.id), 'btn-link btn-small', { 'aria-label': `Edit ${task.title}: due date, time left, priority`, 'data-key': 'now-edit' })),
+    firstPlan ? h('p', { class: 'now-tip' }, 'Look right? Tap Edit to fix the task, or Not now to move it to a later day. ',
+      button('Got it', () => { markReviewed(); $('#now-title')?.focus(); }, 'btn-link btn-small', { 'data-key': 'now-tip-ok' })) : null);
 }
 
 /** “Test tomorrow. 45 min of 1 h left.” (+ turn-taking when two things are due). */
@@ -1029,8 +1039,11 @@ function openOverflowHelp() {
 /** In a block's row: study time for a test reads "Study for Bio test", so it can't be mistaken for the test itself. */
 function workLink(task) {
   if (task.kind !== 'test') return taskLink(task);
-  const label = /^(study|prep|review|revise)\b/i.test(task.title) ? task.title : `Study for ${task.title}`;
-  return h('button', { type: 'button', class: 'task-link', onclick: () => openEditTask(task.id) }, label);
+  return h('button', { type: 'button', class: 'task-link', onclick: () => openEditTask(task.id) }, workLabel(task));
+}
+/** What the work is called: "Study for Bio test" for a test (unless it already says study/prep/review), else the task's name. */
+function workLabel(task) {
+  return task.kind === 'test' && !/^(study|prep|review|revise)\b/i.test(task.title) ? `Study for ${task.title}` : task.title;
 }
 function taskLink(task, extra = null) {
   return h('button', { type: 'button', class: 'task-link', onclick: () => openEditTask(task.id) }, task.title,
@@ -1097,12 +1110,7 @@ function renderWeek(week) {
     app.state.prefs.weekTipHidden ? null : h('p', { class: 'hint week-tip' }, 'Updates by itself. Tap any task, day or block to change it. ',
       button('Hide', () => commit((s) => { s.prefs.weekTipHidden = true; }), 'btn-link btn-small', { 'aria-label': 'Hide this tip', 'data-key': 'week-tip-hide' }))));
   if (!week) { put(root, h('p', { class: 'alert alert-danger' }, 'Something went wrong making your plan. Your tasks are safe.')); return; }
-  if (!app.state.settings.school) {
-    put(root, h('section', { class: 'callout-card', 'aria-label': 'Set up your free blocks' },
-      h('p', { class: 'callout-title' }, 'Add your free blocks'),
-      h('p', { class: 'small' }, 'Your plan uses study hours only for now.'),
-      h('div', { class: 'actions' }, button('Set up free blocks', openSchoolSetup, 'btn-primary btn-small', { 'data-key': 'week-setup' }))));
-  }
+  if (!app.state.settings.school) put(root, freeBlocksInvite(openSchoolSetup, 'week-setup'));
   const open = app.state.tasks.filter((x) => x.status === 'open');
   const name = (x) => taskLink(x, x.deadline && x.deadline.block ? h('span', { class: 'muted small' }, ` · ${x.deadline.block} block`) : null);
   // On a phone, one day at a time: a row of day buttons with ‹ ›. On a computer, the whole week (the row is hidden).
@@ -2228,7 +2236,7 @@ function wipeEverything(message) {
   } catch { /* storage unavailable: nothing persisted anyway */ }
   app.state = emptyState();
   app.mode = 'real';
-  app.addDraft = null; app.addOpen = false; app.setupDraft = null;
+  app.addDraft = null; app.addOpen = false; app.addMulti = false; app.setupDraft = null; app.setupExpanded = false;
   app.banners.unreadable = null; app.banners.saveError = null; app.blockSaves = false;
   closeSheet();
   app.planDate = today();
