@@ -73,14 +73,13 @@ export function rankTasks(tasks, ctx) {
       const due = dueText(task, today);
       if (c.state === 'lastDay') {
         tier = 'urgent';
-        if (cutoffMin != null) reasons.push(`${due}, so it is scheduled first to finish in time.`);
-        else if (!task.deadline.time) reasons.push(`${due}. Date-only deadlines count as due at the start of the day, so today is the last chance to work on it.`);
-        else reasons.push(`${due}, before your study time that day, so today is the last chance to work on it.`);
+        if (cutoffMin != null) reasons.push(`${due}, so it's planned first to finish in time.`);
+        else reasons.push(`${due}, so today is the last chance to work on it.`); // date-only: due when the day starts; or due before that day's study time
       } else {
         const highPace = pace >= AT_RISK_PACE;
         const bigUnstarted = substantial && !started && daysLeft <= 3;
         tier = highPace || bigUnstarted ? 'atRisk' : 'normal';
-        reasons.push(`${due}. Needs about ${Math.ceil(pace)} min a day over ${daysLeft} days to finish in time.`);
+        reasons.push(`${due}.`); // the per-day pace isn't shown: sessions are at least 25 min, so it didn't match the plan
         if (highPace) reasons.push(`At risk: that is ${AT_RISK_PACE}+ min a day, so waiting makes it harder.`);
         else if (bigUnstarted) reasons.push('At risk: it is a big task that has not been started yet.');
       }

@@ -317,7 +317,9 @@ function cleanTitle(original, spans) {
  * @param {string} today  current local date 'YYYY-MM-DD' (NOT the selected planning date)
  */
 export function parseTaskText(input, today) {
-  const original = String(input ?? '').replace(/\s+/g, ' ').trim();
+  const original = String(input ?? '').replace(/\s+/g, ' ').trim()
+    // A time typed right after a word still counts: "Bio test45 mins" → "Bio test 45 mins" ("45m"/"2h" only with no space)
+    .replace(/(\p{L})(\d+(?:\.\d+)?(?:\s*(?:mins?|minutes?|hrs?|hours?)|[mh])\b)/giu, '$1 $2');
   const state = makeState(original);
   const draft = {
     id: newId('d'),

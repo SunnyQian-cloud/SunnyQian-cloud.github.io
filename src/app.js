@@ -502,8 +502,7 @@ function hasExceptions(free, meetings) {
   const fromLetters = new Set([...free].flatMap(letterKeys));
   return fromLetters.size !== meetings.size || [...meetings].some((k) => !fromLetters.has(k));
 }
-const isWide = () => { try { return window.matchMedia('(min-width: 900px)').matches; } catch { return false; } };
-/** The per-day grid, folded on a phone (most students only tap letters); open on a computer or when there are exceptions. */
+/** The per-day grid, folded at first (most students only tap letters); open when the student already has exceptions. */
 function gridFold(open, onToggle, keyPrefix, grid) {
   return h('details', { class: 'grid-fold', open, ontoggle: (e) => onToggle(e.target.open) },
     h('summary', { 'data-key': `${keyPrefix}-fold` },
@@ -579,7 +578,7 @@ function setupCard() {
     d.wk === 'NONE' ? h('p', { class: 'hint' }, 'Saturdays stay class-free. If a later Saturday has classes, tap it on Week.') : null,
     h('p', { class: 'hint' }, 'Tap your usual free blocks, then check each day for exceptions.'),
     letters,
-    gridFold(d.gridOpen ?? (isWide() || hasExceptions(free, meetings)), (open) => { d.gridOpen = open; }, 'setup-grid', grid),
+    gridFold(d.gridOpen ?? hasExceptions(free, meetings), (open) => { d.gridOpen = open; }, 'setup-grid', grid),
     keepRow,
     h('div', { class: 'actions setup-save-row' },
       button('Back', () => go2(1), 'btn-ghost'),
@@ -920,19 +919,10 @@ function nowLine(plan, item, task) {
   return parts.join(' ');
 }
 
-/** “Takes turns with …” when two urgent things share tonight (shown under Why this?). */
-function turnTaking(plan, item) {
-  const info = plan.tasks[item.taskId] || {};
-  if (info.tier !== 'urgent' || info.late || info.cutoffMin != null) return null;
-  const partner = Object.entries(plan.tasks).find(([id, o]) => id !== item.taskId && o.tier === 'urgent' && o.scheduled > 0 && taskById(id) && taskById(id).status === 'open');
-  return partner ? `Takes turns with “${taskById(partner[0]).title}” so neither gets squeezed.` : null;
-}
-
 function openWhy(plan, item, task) {
   markReviewed();
-  const turns = turnTaking(plan, item);
   openSheet('Why this?', [
-    h('ul', {}, ...(turns ? [turns] : []).concat(explainSession(plan, app.state, item)).map((l) => h('li', {}, l))),
+    ...explainSession(plan, app.state, item).map((l) => h('p', { class: 'why-line' }, l)),
     h('p', { class: 'small muted' }, 'Blockwise fills your free blocks and study hours for the week, and updates the plan whenever something changes.'),
     button('Edit this task', () => openEditTask(task.id), 'btn-secondary btn-small'),
   ]);
@@ -1091,8 +1081,9 @@ function todaySchedule(plan, t) {
   const allOver = info.slots.length > 0 && info.slots.every((sl) => sl.e <= nm);
   return h('section', { class: 'list-section', 'aria-label': 'Today\'s blocks' },
     h('div', { class: 'day-card today-card' },
-      h('h2', { class: 'today-card-title' }, 'Today\'s blocks'),
-      app.state.tasks.some((x) => x.status === 'open') ? h('p', { class: 'hint today-tip' }, 'Tap a task to edit it.') : null,
+      h('h2', { class: 'today-card-title' }, h('button', { type: 'button', class: 'title-btn', onclick: openSchedule, 'data-key': 'today-card-title' }, 'Today\'s blocks', h('span', { class: 'visually-hidden' }, ' – change today'))),
+      // Before setup the "Not set yet" rows can't be tapped, so the hint waits
+      info.slots.some((sl) => sl.unset) ? null : h('p', { class: 'hint today-tip' }, app.state.tasks.some((x) => x.status === 'open') ? 'Tap any task or block to change it.' : 'Tap any block to change it.'),
       info.dueOther.length ? h('p', { class: 'day-due' }, 'Due today: ', ...joinNodes(info.dueOther.map((x) => taskLink(x, x.deadline.time && !x.deadline.block ? h('span', { class: 'muted small' }, ` · ${fmtT(D.parseHM(x.deadline.time))}`) : x.deadline.block ? h('span', { class: 'muted small' }, ` · ${x.deadline.block} block`) : null)))) : null,
       lis.length ? h('ul', { class: 'slots' }, ...lis) : null,
       allOver ? h('p', { class: 'day-note' }, 'No more scheduled blocks today.') : null,
@@ -1113,7 +1104,7 @@ function renderWeek(week) {
   if (!app.state.settings.school) put(root, freeBlocksInvite(openSchoolSetup, 'week-setup'));
   const open = app.state.tasks.filter((x) => x.status === 'open');
   const name = (x) => taskLink(x, x.deadline && x.deadline.block ? h('span', { class: 'muted small' }, ` · ${x.deadline.block} block`) : null);
-  // On a phone, one day at a time: a row of day buttons with ‹ ›. On a computer, the whole week (the row is hidden).
+  // One day at a time on phone and computer: a row of day buttons with ‹ ›, so there's no long scroll.
   const days = week.days.slice(1); // tomorrow … six days out (today is on Today)
   const sel = Math.min(Math.max(app.weekSel || 0, 0), days.length - 1);
   const end = D.addDays(t, week.days.length - 1);
@@ -1195,9 +1186,10 @@ function slotRow(sl) {
       h('div', { class: 'slot-when' }, h('span', { class: 'slot-name' }, blockDot(sl.letter || sl.block), sl.name), h('span', { class: 'slot-time' }, fmtRange(sl.s, sl.e))),
       h('div', { class: 'slot-what' }, ...dueEls, h('span', { class: 'class-label' }, 'Not set yet')));
   }
+  // Every block's name can be tapped, on Today as on Week: a free block opens "keep it free"; any other row opens that day's settings
   const nameEl = sl.letter
     ? h('button', { type: 'button', class: 'slot-name slot-btn', onclick: () => openBlockSheet(sl.date, sl.letter), 'aria-label': `${sl.name}, ${fmtRange(sl.s, sl.e)}. ${sl.kept ? 'Kept free' : 'Free'}. Change` }, blockDot(sl.letter), sl.name)
-    : h('span', { class: 'slot-name' }, blockDot(sl.letter || sl.block), sl.name);
+    : dayNameBtn(sl, sl.items && sl.items.length ? 'Planned' : 'Free');
   if (sl.kept) {
     return h('li', { class: ['slot is-kept', hasDue && 'has-due'] },
       h('div', { class: 'slot-when' }, nameEl, h('span', { class: 'slot-time' }, fmtRange(sl.s, sl.e))),
@@ -1205,7 +1197,7 @@ function slotRow(sl) {
   }
   if (sl.cls) {
     return h('li', { class: ['slot is-class', hasDue && 'has-due'] },
-      h('div', { class: 'slot-when' }, h('span', { class: 'slot-name' }, blockDot(sl.letter || sl.block), sl.name), h('span', { class: 'slot-time' }, fmtRange(sl.s, sl.e))),
+      h('div', { class: 'slot-when' }, dayNameBtn(sl, 'Class'), h('span', { class: 'slot-time' }, fmtRange(sl.s, sl.e))),
       h('div', { class: 'slot-what' }, ...(hasDue ? dueEls : [h('span', { class: 'class-label' }, 'Class')])));
   }
   if (sl.past) {
@@ -1222,6 +1214,15 @@ function slotRow(sl) {
         : sl.freeTail >= 15 ? h('span', { class: 'free-pill' }, `Free · ${fmtShort(sl.freeTail)}`) : null));
 }
 const fmtShort = (m) => fmtDur(m).replace(' min', ' m');
+/** A class, study hours or other row: tapping its name changes that day (Today → Edit schedule, other days → the day's settings). */
+function dayNameBtn(sl, status) {
+  if (!sl.date) return h('span', { class: 'slot-name' }, blockDot(sl.letter || sl.block), sl.name);
+  const isToday = sl.date === today();
+  return h('button', {
+    type: 'button', class: 'slot-name slot-btn', onclick: () => (isToday ? openSchedule() : openDaySheet(sl.date)),
+    'aria-label': `${sl.name}, ${fmtRange(sl.s, sl.e)}. ${status}. Change ${isToday ? 'today' : 'this day'}`,
+  }, blockDot(sl.letter || sl.block), sl.name);
+}
 
 /** A day's rows: free blocks, extra free time and study hours (with what was placed in each), plus classes for context. */
 function daySlots(plan, date) {
@@ -1235,7 +1236,7 @@ function daySlots(plan, date) {
     if (last && s <= last.e && last.school && b.school) { last.e = Math.max(last.e, e); continue; }
     slots.push({ s, e, name: b.school ? b.label.replace(/x block$/, ' block') : (b.label || 'Free time'), school: b.school, letter: b.school ? b.letter : null, date });
   }
-  if (ds.studyStart) slots.push({ s: D.parseHM(ds.studyStart), e: D.parseHM(ds.studyStop), name: 'Study hours' });
+  if (ds.studyStart) slots.push({ s: D.parseHM(ds.studyStart), e: D.parseHM(ds.studyStop), name: 'Study hours', date });
   const sessions = plan.items.filter((i) => i.type === 'session');
   for (const sl of slots) {
     const inside = sessions.filter((i) => i.start >= sl.s && i.start < sl.e);
@@ -1255,7 +1256,7 @@ function daySlots(plan, date) {
     kept.push({ s, e, name: `${b.letter} block`, letter: b.letter, date, kept: b.keptWhy, items: [] });
   }
   slots.push(...kept);
-  for (const c of classPeriodsForDate(st, date)) slots.push({ s: c.start, e: c.end, name: `${c.code} block`, block: c.code, cls: true });
+  for (const c of classPeriodsForDate(st, date)) slots.push({ s: c.start, e: c.end, name: `${c.code} block`, block: c.code, cls: true, date });
   // Before setup: show the timetable, with each block's availability "not set" (nothing is planned in them).
   let unsetNote = null;
   if (!school.configured && !(st.days[date] && st.days[date].noClasses)) {
@@ -1672,7 +1673,7 @@ function openSchoolSetup() {
       h('legend', {}, '1. What are your free blocks?'),
       h('p', { class: 'hint' }, 'Tap your usual free blocks, then check each day for exceptions.'),
       letterBox),
-    h('div', { class: 'field' }, gridFold(isWide() || hasExceptions(free, meetings), () => {}, 'school-grid', gridBox)),
+    h('div', { class: 'field' }, gridFold(hasExceptions(free, meetings), () => {}, 'school-grid', gridBox)),
     h('fieldset', { class: 'field' },
       h('legend', {}, 'Keep any free block for yourself? (optional)'),
       h('p', { class: 'hint' }, 'Tap a free block you\'d rather not use for work — lunch, a club, time off. You can also keep a block free for one day from Week.'),

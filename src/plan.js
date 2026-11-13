@@ -461,6 +461,16 @@ export function explainSession(plan, state, item) {
   if (!info) return [];
   const byId = new Map((state.tasks || []).map((t) => [t.id, t]));
   const lines = [info.reasons[0]];
+  // What this session does, in the plan's own numbers (never a per-day share that rounding to 25 min changed)
+  const task = byId.get(item.taskId);
+  if (task) {
+    const before = plan.items.filter((i) => i.type === 'session' && i.taskId === item.taskId && i.start < item.start).reduce((m, i) => m + i.minutes, 0);
+    const left = Math.max(0, task.remainingMin - before);
+    if (item.minutes >= left) {
+      lines[0] += ` This ${formatDuration(item.minutes)} session finishes it.`;
+      if (item.purpose === 'share' && info.daysLeft > 1) lines.push(`Sessions are at least ${MIN_SESSION} min, so it isn't split into smaller pieces.`);
+    } else lines[0] += ` This session: ${formatDuration(item.minutes)} of the ${formatDuration(left)} left.`;
+  }
   if (item.purpose === 'urgent' && !info.late && info.cutoffMin == null) {
     const others = Object.entries(plan.tasks)
       .filter(([id, o]) => id !== item.taskId && o.tier === 'urgent' && o.cutoffMin == null && o.scheduled > 0)
@@ -475,12 +485,7 @@ export function explainSession(plan, state, item) {
       lines.push(`It takes turns with ${others.join(' and ')} so one deadline doesn't crowd out the other.${extra}`);
     }
   }
-  if (item.purpose === 'atRisk') {
-    lines.push(info.started
-      ? `Today's share is ${formatDuration(info.share)} of ${formatDuration(info.planned)}, so the rest stays manageable.`
-      : 'A first session now makes the rest easier to finish on time.');
-  }
-  if (item.purpose === 'share') lines.push(`Today's share: ${formatDuration(info.share)} of ${formatDuration(info.planned)}, spread over ${info.daysLeft} days.`);
+  if (item.purpose === 'atRisk') lines.push(info.started ? 'Working on it today keeps the rest manageable.' : 'Starting now makes the rest easier to finish on time.');
   if (item.purpose === 'ahead') lines.push('Optional: nothing more urgent fits here, so this gets you ahead.');
   if (plan.energy === 'low' && plan.sessionLen < plan.baseSessionLen) lines.push(`Energy is low, so sessions are shorter (${plan.sessionLen} min). The order of priorities doesn't change.`);
   const extra = info.reasons.slice(1).filter((r) => /High priority|Low priority|uncertain|suggested/.test(r));
