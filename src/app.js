@@ -59,10 +59,8 @@ const app = {
   banners: { storage: false, unreadable: null, saveError: null },
   blockSaves: false,
   open: {},
-  addOpen: false,   // the add box on Today
   addDraft: null,   // a parsed line waiting for Save
   addText: '',      // what's typed in the add box (kept across re-renders)
-  addMulti: false,  // after "Add another", the box stays open between saves
   setupExpanded: false, // a task was saved before setup, and the student tapped Set up free blocks
   voiceState: null,
   lastToday: null,
@@ -279,8 +277,8 @@ function go(view, { focus = true } = {}) {
   }
 }
 
+/** + Add task: the add box is always on Today, so this goes there and puts the cursor in it. */
 function openAdd() {
-  app.addOpen = true;
   if (app.view !== 'today') go('today', { focus: false }); else render();
   const input = document.getElementById('add-input');
   if (input) input.focus();
@@ -313,7 +311,7 @@ function renderToday(week) {
   const notSetUp = app.mode === 'real' && !state.settings.school && !state.prefs.setupNudgeDismissed;
   const setupLater = () => (app.setupExpanded || (app.setupDraft && app.setupDraft.step === 2) ? setupCard() : freeBlocksInvite(() => { app.setupExpanded = true; render(); $('[data-key="setup-title"]')?.focus(); }, 'today-setup'));
   if (notSetUp && !state.tasks.length) put(root, setupCard());
-  if (app.addOpen || app.addDraft || !open.length) put(root, addBox(open.length > 0));
+  put(root, addBox(open.length > 0)); // always there: one line, never hidden
   if (!open.length) {
     if (notSetUp && state.tasks.length) put(root, setupLater());
     if (!notSetUp) put(root, h('p', { class: 'empty-hint' }, 'Add what\'s due — one line is enough, like “Bio test Tuesday, study 45 min”.'));
@@ -602,7 +600,7 @@ let voice = null;
 /** Voice is off for the pilot (it didn't work reliably for testers). `?voice=1` turns it on to test it. */
 const VOICE_ON = (() => { try { return new URLSearchParams(window.location.search).has('voice'); } catch { return false; } })();
 
-function addBox(canClose) {
+function addBox(hasTasks) {
   const input = h('input', { id: 'add-input', type: 'text', maxlength: '300', autocomplete: 'off', enterkeyhint: 'done', placeholder: 'What\'s due? e.g. Bio test Tuesday, study 45 min', 'aria-label': 'What\'s due?', 'data-key': 'add-input', oninput: (e) => { app.addText = e.target.value; } });
   input.value = app.addText;
   const voiceOk = VOICE_ON && !!getRecognitionCtor(window);
@@ -622,10 +620,10 @@ function addBox(canClose) {
     app.voiceState ? voicePanel() : null,
     VOICE_ON && !voiceOk ? h('p', { class: 'hint' }, VOICE_ERRORS.unsupported) : null,
     app.addDraft ? draftLine(app.addDraft) : null,
-    !canClose && !app.addDraft ? h('p', { class: 'hint add-hint' }, 'For a test, give the study time — not how long the test lasts.') : null,
-    canClose && !app.addDraft ? h('div', { class: 'add-foot' },
-      button('Paste a list instead', () => openCapture({ bulk: true }), 'btn-link btn-small'),
-      button('Close', () => { app.addOpen = false; app.addMulti = false; app.addText = ''; stopVoice(); render(); }, 'btn-link btn-small', { 'data-key': 'add-close' })) : null);
+    // Until the first task: the test-time note and Paste a list. After that the box is just one line (Paste a list is in ⋯).
+    !hasTasks && !app.addDraft ? h('div', { class: 'add-foot' },
+      h('p', { class: 'hint add-hint' }, 'For a test, give the study time — not how long the test lasts.'),
+      button('Paste a list instead', openCapture, 'btn-link btn-small', { 'data-key': 'add-paste' })) : null);
 }
 
 function micIcon() {
@@ -725,16 +723,13 @@ function saveDraft(d) {
   if (!validateDraft(d).ok) { render(); return; }
   const task = draftToTask(d, now().toISOString());
   app.addDraft = null;
-  // One task: the box closes so the plan comes first ("Add another" reopens it). After Add another, it stays open for more.
-  const more = app.addMulti;
-  app.addOpen = more;
   app.addText = '';
-  // Let go of the Save button first, so the redraw doesn't park focus on a stray control (and a ring shows only after keyboard use)
-  if (!more) document.activeElement?.blur();
-  commit((s) => { s.tasks.push(task); }, null);
-  toast(`Added “${task.title}”. Your week is updated.`, more ? null : { label: 'Add another', fn: () => { app.addMulti = true; openAdd(); } });
+  // The box stays, empty. On a phone the keyboard closes so the updated plan shows; on a computer the cursor stays for the next one.
+  const touch = isTouchDevice();
+  if (touch) document.activeElement?.blur(); // so the redraw doesn't park focus on a stray control
+  commit((s) => { s.tasks.push(task); }, `Added “${task.title}”. Your week is updated.`);
   const input = document.getElementById('add-input');
-  if (more && input) { input.value = ''; input.focus(); }
+  if (!touch && input) { input.value = ''; input.focus(); }
   else ($('#now-title') || $('#view-today .now h2') || $('#today-title'))?.focus();
 }
 
@@ -1387,6 +1382,7 @@ function openMenu() {
     demo ? row('Exit the example', 'Back to your own tasks', () => { closeSheet(); exitDemo(); }, 'menu-exit-demo')
       : row('See an example day', 'Fictional — kept separate from your tasks', () => { closeSheet(); enterDemo(); }, 'demo-open'),
     h('h3', { class: 'small-heading' }, 'More'),
+    row('Paste a list of tasks', 'Several at once, one per line', openCapture, 'menu-paste'),
     row('Reminders', 'Phone alerts before free blocks and study hours', () => { closeSheet(); openReminders(); }, 'menu-reminders'),
     row('Add to your Home Screen', null, openInstallHelp, 'menu-install'),
     row('Feedback', 'Questions to answer and copy', () => openSheet('Feedback', feedbackForm()), 'menu-feedback'),
@@ -2237,7 +2233,7 @@ function wipeEverything(message) {
   } catch { /* storage unavailable: nothing persisted anyway */ }
   app.state = emptyState();
   app.mode = 'real';
-  app.addDraft = null; app.addOpen = false; app.addMulti = false; app.setupDraft = null; app.setupExpanded = false;
+  app.addDraft = null; app.setupDraft = null; app.setupExpanded = false;
   app.banners.unreadable = null; app.banners.saveError = null; app.blockSaves = false;
   closeSheet();
   app.planDate = today();
